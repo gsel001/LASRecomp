@@ -18,6 +18,8 @@
 #include "shader_prep.h"
 #include "recolour.h"
 #include "slowframe.h"
+#include "depth_probe.h"
+#include "depth_no_fs.h"
 
 static id<MTLDevice> dev;
 static id<MTLCommandBuffer> cmdbuf;
@@ -49,6 +51,58 @@ void renderer_save_texture(id<MTLTexture> tex, const char *path);
 void renderer_save_texture_alpha(id<MTLTexture> tex, const char *path);
 void renderer_save_game_texture(NvnTexture *t, id<MTLTexture> tex, const char *path, const char *alpha_path);  // (metal.m)
 static char stats_text[320];
+
+// Render-thread only (also when the render thread is disabled). No clock reads or allocations per draw.
+static DepthProbe depth_probe;
+static uint64_t depth_probe_since;
+static uint32_t depth_probe_width, depth_probe_height, depth_probe_samples;
+static uint64_t depth_no_fs_draws, depth_no_fs_omitted, depth_no_fs_fallbacks;
+static bool depth_no_fs_on(void) {
+    static bool on;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        const char *e = getenv("LARECOMP_DEPTH_NO_FS");
+        on = e && !strcmp(e, "1");
+        LOG("[depth-no-fs] experimental=%d (certified MSL, depth-only, single-sample, stencil disabled)\n", on);
+    });
+    return on;
+}
+extern uint64_t renderer_exec_frame(void);
+static bool depth_probe_enabled(void) {
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("LARECOMP_DEPTH_PROBE"); on = e && atoi(e) != 0; }
+    return on != 0;
+}
+static void depth_probe_report(void) {
+    bool probe = depth_probe_enabled(), no_fs = depth_no_fs_on();
+    if (!probe && !no_fs) return;
+    uint64_t now = plat_now_ns();
+    if (!depth_probe_since) { depth_probe_since = now; return; }
+    if (now - depth_probe_since < 5000000000ull) return;
+    char line[512];
+    if (probe) {
+        depth_probe_format(line, sizeof line, &depth_probe.counts);
+        LOG("[depth-probe] frame %llu interval %.1fs %s (completed NVN draws; potential is not proof of safety)\n",
+            (unsigned long long)renderer_exec_frame(), (now - depth_probe_since) / 1e9, line);
+        for (int i = 0; i < depth_probe.ngroups; i++) {
+            const DepthProbeGroup *g = &depth_probe.groups[i];
+            depth_probe_format(line, sizeof line, &g->counts);
+            LOG("[depth-probe] depth target %ux%u %s\n", g->width, g->height, line);
+        }
+        if (depth_probe.other.total) {
+            depth_probe_format(line, sizeof line, &depth_probe.other);
+            LOG("[depth-probe] depth target other %s\n", line);
+        }
+    }
+    if (no_fs)
+        LOG("[depth-no-fs] frame %llu interval %.1fs completed=%llu omitted=%llu fallback_attempts=%llu\n",
+            (unsigned long long)renderer_exec_frame(), (now - depth_probe_since) / 1e9,
+            (unsigned long long)depth_no_fs_draws, (unsigned long long)depth_no_fs_omitted,
+            (unsigned long long)depth_no_fs_fallbacks);
+    depth_no_fs_draws = depth_no_fs_omitted = depth_no_fs_fallbacks = 0;
+    memset(&depth_probe, 0, sizeof depth_probe);
+    depth_probe_since = now;
+}
 
 // ------------------------------------------------------------------ state
 typedef struct {
@@ -111,6 +165,7 @@ static inline double now_ms(void) { return (double)clock_gettime_nsec_np(CLOCK_U
 
 static uint64_t stat_counters_gpu;  // timing counters given the GPU's time (the game's 30 / 60 fps choice)
 const char *renderer_stats(void) {
+    depth_probe_report();
     static int dumps;
     if (dumps++ < 3) {
         LOG("[metal] command counts:");
@@ -157,6 +212,7 @@ void renderer_init(id<MTLDevice> d) {
     dev = d;
     if (!cache) cache = [NSMutableDictionary new];  // (kept: shader preparation may have run on the start screen)
     st_defaults();
+    if (depth_probe_enabled() || depth_no_fs_on()) depth_probe_since = plat_now_ns();
 }
 
 static int g_passes_in_cb;  // render passes encoded into the open command buffer (chunked commits)
@@ -856,6 +912,13 @@ static void begin_pass(void) {
     if (chunk < 0) { const char *e = ENV("LARECOMP_CHUNK_PASSES"); chunk = e ? atoi(e) : 8; }
     if (chunk > 0 && cmdbuf && ++g_passes_in_cb >= chunk) renderer_submit();
     enc = [cb() renderCommandEncoderWithDescriptor:rp];
+    if (depth_probe_enabled()) {
+        // Read the descriptor already used by the real pass; never ask the texture cache to make a view for us.
+        id<MTLTexture> dt = rp.depthAttachment.texture;
+        depth_probe_width = (uint32_t)dt.width;
+        depth_probe_height = (uint32_t)dt.height;
+        depth_probe_samples = (uint32_t)dt.sampleCount;
+    }
     opening_pass = false;
     vp_sx = pass_sx; vp_sy = pass_sy; vp_ox = 0; vp_oy = 0;
     stat_passes++;
@@ -2935,7 +2998,7 @@ static uint64_t hmix(uint64_t h, const void *p, size_t n) {
 #define PIPE_TAB 8192
 static struct { uint64_t key; void *pipe; } pipe_tab[PIPE_TAB];
 
-static uint64_t pipeline_state_hash(Prog *pr) {
+static uint64_t pipeline_state_hash(Prog *pr, bool omit_fs) {
     uint64_t h = 0xcbf29ce484222325ull;
     h = hmix(h, &pr, sizeof pr);
     h = hmix(h, &st.rt.ncolor, sizeof st.rt.ncolor);
@@ -2954,6 +3017,7 @@ static uint64_t pipeline_state_hash(Prog *pr) {
     h = hmix(h, &st.channel_mask, sizeof st.channel_mask);
     h = hmix(h, &st.color_state[0], sizeof st.color_state[0]);
     h = hmix(h, &st.ms[0xC], 1);
+    if (omit_fs) { const uint32_t tag = 0x4e4f4653; h = hmix(h, &tag, sizeof tag); }
     return h ? h : 1;
 }
 
@@ -2993,9 +3057,9 @@ static void rec_from_state(ShaderRec *r, bool flip_x, uint32_t mode) {
 
 // The pipeline a draw needs: everything but the attachment formats (attachment_formats / attachment_formats_rec),
 // from the variant record of the draw's state (rec_from_state) or of the shipped list (renderer_prepare)
-static void pipeline_desc(MTLRenderPipelineDescriptor *pd, Prog *pr, const ShaderRec *r) {
+static void pipeline_desc(MTLRenderPipelineDescriptor *pd, Prog *pr, const ShaderRec *r, bool omit_fs) {
     pd.vertexFunction = pr->vs;
-    pd.fragmentFunction = pr->fs;
+    pd.fragmentFunction = omit_fs ? nil : pr->fs;
     MTLVertexDescriptor *vd = [MTLVertexDescriptor vertexDescriptor];
     uint32_t used_streams = 0;
     for (int i = 0; i < 32; i++) {
@@ -3051,7 +3115,7 @@ static void pipeline_desc(MTLRenderPipelineDescriptor *pd, Prog *pr, const Shade
 // What makes a pipeline (the descriptor's contents): the key of the pipeline caches. (Without the boot generation:
 // draws prefix it, prepared pipelines' functions live as long as the process.)
 static NSString *pipeline_key(MTLRenderPipelineDescriptor *pd, Prog *pr) {
-    NSMutableString *pk = [NSMutableString stringWithFormat:@"%p %p %lu %lu", pr->vs, pr->fs,
+    NSMutableString *pk = [NSMutableString stringWithFormat:@"%p %p %lu %lu", pd.vertexFunction, pd.fragmentFunction,
                            (unsigned long)pd.depthAttachmentPixelFormat, (unsigned long)pd.stencilAttachmentPixelFormat];
     for (int i = 0; i < 8; i++) {
         MTLRenderPipelineColorAttachmentDescriptor *ca = pd.colorAttachments[i];
@@ -3076,6 +3140,37 @@ static id prep_find_pipe(NSString *body) {
     id p = g_prep_pipes[body];
     pthread_mutex_unlock(&g_prep_lock);
     return p;
+}
+
+// ShaderRec has no depth/stencil-test state. Preparation builds both forms when the static shape permits it;
+// only the live draw can select the no-FS form. Views, stencil, invalid compare modes and resource images fall back.
+static bool depth_no_fs_draw(Prog *pr, uint32_t mode) {
+    if (!depth_no_fs_on()) return false;
+    static int nodt = -1;
+    if (nodt < 0) nodt = getenv("LARECOMP_NO_DEPTH_TEST") != NULL;
+    bool color = false, images = false;
+    for (int i = 0; i < st.rt.ncolor && i < 8; i++) if (st.rt.color[i]) color = true;
+    for (int i = 0; i < 8; i++) if (st.img[1][i]) images = true;
+    NvnTexture *d = st.rt.depth;
+    DepthNoFsState s = {
+        .enabled = true, .has_depth = d && renderer_format_is_depth(d->format) && d->format != 0x31,
+        .has_color = color, .samples = d ? d->samples : 0,
+        .depth_test = st.ds[0] == 1, .depth_write = st.ds[1] == 1, .stencil = st.ds[3] != 0,
+        .alpha_to_coverage = st.ms[0xC] != 0,
+        .unknown = !d || d->target != 1 || st.rt.has_dview || st.rt.ncolor != 0 ||
+                   st.ds[2] < 1 || st.ds[2] > 8 || nodt ||
+                   images || shader_topo_class(mode) != 2
+    };
+    return depth_no_fs_eligible(pr->fi, &s);
+}
+
+static bool depth_no_fs_prepare(Prog *pr, const ShaderRec *r) {
+    DepthNoFsState s = {
+        .enabled = depth_no_fs_on(), .has_depth = renderer_format_is_depth(r->depth) && r->depth != 0x31,
+        .has_color = r->ncolor != 0, .samples = r->samples, .depth_test = true, .depth_write = true,
+        .alpha_to_coverage = r->a2c != 0, .unknown = r->topo != 2
+    };
+    return depth_no_fs_eligible(pr->fi, &s);
 }
 
 static void draw(CmdRec *r, bool indexed) {
@@ -3186,7 +3281,9 @@ static void draw(CmdRec *r, bool indexed) {
         else used_streams |= 1u << ((a >> 8) & 0x1F);
     }
     // pipeline
-    uint64_t phash = pipeline_state_hash(pr);
+    bool omit_fs = depth_no_fs_draw(pr, (uint32_t)r->x[0]);
+pipeline_lookup: ;
+    uint64_t phash = pipeline_state_hash(pr, omit_fs);
     uint32_t pslot = (uint32_t)(phash ^ (phash >> 29)) & (PIPE_TAB - 1);
     while (pipe_tab[pslot].key && pipe_tab[pslot].key != phash) pslot = (pslot + 1) & (PIPE_TAB - 1);
     id<MTLRenderPipelineState> pipe = pipe_tab[pslot].key ? (__bridge id<MTLRenderPipelineState>)pipe_tab[pslot].pipe : nil;
@@ -3195,7 +3292,7 @@ static void draw(CmdRec *r, bool indexed) {
     rec_from_state(&rec, vkey.flip_x, (uint32_t)r->x[0]);
     MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
     attachment_formats(pd);
-    pipeline_desc(pd, pr, &rec);
+    pipeline_desc(pd, pr, &rec, omit_fs);
     NSString *body = pipeline_key(pd, pr);
     NSString *pk = [NSString stringWithFormat:@"%u %@", g_boot_gen, body];
     id pobj = cache[pk];
@@ -3207,7 +3304,10 @@ static void draw(CmdRec *r, bool indexed) {
             id done = ready_pipes[pk];
             if (done) { [ready_pipes removeObjectForKey:pk]; cache[pk] = done; pobj = done; }
         }
-        if (pobj == pending) { stat_skipped++; return; }
+        if (pobj == pending) {
+            if (omit_fs) { omit_fs = false; depth_no_fs_fallbacks++; goto pipeline_lookup; }
+            stat_skipped++; return;
+        }
     }
     if (!pobj) {
         if (shader_rec_recording()) shader_rec_note(&rec);
@@ -3240,11 +3340,15 @@ static void draw(CmdRec *r, bool indexed) {
                 slow_note_build("pipeline", (uint64_t)((now_ms() - t0) * 1e6));
                 __atomic_fetch_add(&stat_compiles, 1, __ATOMIC_RELAXED);
             });
+            if (omit_fs) { omit_fs = false; depth_no_fs_fallbacks++; goto pipeline_lookup; }
             stat_skipped++;
             return;
         }
     }
-    if (pobj == [NSNull null]) { stat_skipped++; return; }
+    if (pobj == [NSNull null]) {
+        if (omit_fs) { omit_fs = false; depth_no_fs_fallbacks++; goto pipeline_lookup; }
+        stat_skipped++; return;
+    }
     pipe = pobj;
     pipe_tab[pslot].key = phash;
     pipe_tab[pslot].pipe = (__bridge void *)pipe;  // retained by the cache dictionary
@@ -3631,6 +3735,18 @@ static void draw(CmdRec *r, bool indexed) {
     }
     }  // runs
     stat_draws++;
+    if (depth_no_fs_on()) { depth_no_fs_draws++; depth_no_fs_omitted += omit_fs; }
+    if (depth_probe_enabled()) {
+        bool color = false;
+        for (int i = 0; i < st.rt.ncolor && i < 8; i++) if (st.rt.color[i]) color = true;
+        DepthProbeDraw d = {
+            .fs = pr->fi, .width = depth_probe_width, .height = depth_probe_height, .samples = depth_probe_samples,
+            .has_color = color, .has_depth = st.rt.depth && renderer_format_is_depth(st.rt.depth->format) && st.rt.depth->format != 0x31,
+            .alpha_to_coverage = st.ms[0xC] != 0,
+            .unsupported = st.rt.ncolor < 0 || st.rt.ncolor > 8 || (st.rt.depth && st.rt.depth->target != 1)
+        };
+        depth_probe_note(&depth_probe, &d);
+    }
     if (dbg_this) {
         static int nlog;
         if (nlog++ < 4) {
@@ -4232,6 +4348,7 @@ static void exec_list(uint64_t handle, int depth) {
 static dispatch_semaphore_t g_prep_slots;
 
 bool renderer_prepare_begin(void) {
+    (void)depth_no_fs_on();
     if (!dev) {
         extern void *ui_metal_device(void);
         dev = (__bridge id<MTLDevice>)ui_metal_device();
@@ -4309,22 +4426,28 @@ bool renderer_prepare(const ShaderRec *r, const ShaderBlob *vsb, const ShaderBlo
     prep_run(^{
         @synchronized(pr) { if (!pr->ready && !pr->failed) compile_program(pr); }
         if (!pr->ready) return;
-        MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
-        attachment_formats_rec(pd, &rec);
-        pipeline_desc(pd, pr, &rec);
-        NSString *body = pipeline_key(pd, pr);
-        if (prep_find_pipe(body)) return;
-        NSError *err = nil;
-        id<MTLRenderPipelineState> ps = archive_render_pipeline(pd, &err);
-        if (!ps) { static int n; if (n++ < 10) LOG("[shader] prepared pipeline failed: %s\n", err.localizedDescription.UTF8String); return; }
-        pthread_mutex_lock(&g_prep_lock);
-        g_prep_pipes[body] = ps;
-        pthread_mutex_unlock(&g_prep_lock);
+        for (int form = 0; form < (depth_no_fs_prepare(pr, &rec) ? 2 : 1); form++) {
+            MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
+            attachment_formats_rec(pd, &rec);
+            pipeline_desc(pd, pr, &rec, form != 0);
+            NSString *body = pipeline_key(pd, pr);
+            if (prep_find_pipe(body)) continue;
+            NSError *err = nil;
+            id<MTLRenderPipelineState> ps = archive_render_pipeline(pd, &err);
+            if (!ps) { static int n; if (n++ < 10) LOG("[shader] prepared pipeline failed: %s\n", err.localizedDescription.UTF8String); continue; }
+            pthread_mutex_lock(&g_prep_lock);
+            g_prep_pipes[body] = ps;
+            pthread_mutex_unlock(&g_prep_lock);
+        }
     });
     return true;
 }
 
 void renderer_reset(void) {
+    depth_no_fs_draws = depth_no_fs_omitted = depth_no_fs_fallbacks = 0;
+    memset(&depth_probe, 0, sizeof depth_probe);
+    depth_probe_since = depth_probe_enabled() || depth_no_fs_on() ? plat_now_ns() : 0;
+    depth_probe_width = depth_probe_height = depth_probe_samples = 0;
     memset(td_tab, 0, sizeof td_tab);  // (recorded clears and depth guesses of the old boot's textures)
     td_pending = 0;
     renderer_flush();
