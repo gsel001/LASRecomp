@@ -199,6 +199,16 @@ static void log_startup_info(void) {
     else if (si.ram) snprintf(ram, sizeof ram, "%llu GB RAM", tenths / 10);
     fprintf(stderr, "[info] LAS Recomp %s, %s, %s%s, %s%s%s\n", larecomp_version(), si.os[0] ? si.os : "unknown OS",
             si.cpu[0] ? si.cpu : "unknown CPU", cores, ram, si.package ? ", " : "", si.package ? si.package : "");
+    // The LARECOMP_ switches this run was started with (a test launcher's, a tester's own), so a log says which
+    // variant it came from.
+#ifdef _WIN32
+    char **env = _environ;
+#else
+    extern char **environ;
+    char **env = environ;
+#endif
+    for (char **e = env; e && *e; e++)
+        if (!strncmp(*e, "LARECOMP_", 9) && strncmp(*e, "LARECOMP_REEXEC", 15)) fprintf(stderr, "[env] %s\n", *e);
 }
 
 int main(int argc, char **argv) {
