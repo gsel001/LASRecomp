@@ -12,9 +12,18 @@ JOBS=${2:-8}
 MODE=${3:-both}
 REF=${REF:-652e234}
 OUT=build/test_translate
-mkdir -p "$OUT/old" "$OUT/dump"
-git show "$REF:runtime/nvn/maxwell/translate.c" > "$OUT/old/translate.c"
-git show "$REF:runtime/nvn/maxwell/shader.h" > "$OUT/old/shader.h"
+mkdir -p "$OUT/old/maxwell" "$OUT/dump"
+git show "$REF:runtime/nvn/maxwell/translate.c" > "$OUT/old/maxwell/translate.c"
+git show "$REF:runtime/nvn/maxwell/shader.h" > "$OUT/old/maxwell/shader.h"
+# Recent references include the depth eligibility headers. Preserve their relative include layout, and use
+# each reference's own contract rather than accidentally compiling its translator against the working tree.
+for header in depth_no_fs.h depth_probe.h depth_no_fs_diag.h; do
+  if git cat-file -e "$REF:runtime/nvn/$header" 2>/dev/null; then
+    git show "$REF:runtime/nvn/$header" > "$OUT/old/$header"
+  else
+    rm -f "$OUT/old/$header"
+  fi
+done
 CC=${CC:-clang}
 RENAME="-Dmaxwell_translate=old_maxwell_translate -Dmaxwell_free=old_maxwell_free
  -Dmaxwell_disassemble=old_maxwell_disassemble -Dmaxwell_gmem_base=old_maxwell_gmem_base
@@ -24,7 +33,7 @@ RENAME="-Dmaxwell_translate=old_maxwell_translate -Dmaxwell_free=old_maxwell_fre
  -Dmaxwell_gmem_fs_miss=old_maxwell_gmem_fs_miss"
 PRE=""
 case "$(uname -s)" in MINGW*|MSYS*) PRE="-include malloc.h";; esac
-$CC -O2 -w $PRE $RENAME -c "$OUT/old/translate.c" -o "$OUT/old.o"
+$CC -O2 -w $PRE $RENAME -c "$OUT/old/maxwell/translate.c" -o "$OUT/old.o"
 $CC -O2 -Wall -c runtime/nvn/maxwell/translate.c -o "$OUT/new.o"
 if [ "${GLSL:-1}" = 1 ]; then
   $CC -O2 -Wall -DWITH_GLSL tools/test_translate.c "$OUT/new.o" "$OUT/old.o" -o "$OUT/test_translate" \

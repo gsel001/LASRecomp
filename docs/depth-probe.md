@@ -2,18 +2,20 @@
 
 This is measurement-only instrumentation for issue #67. It does not remove fragment shaders, create pipelines or
 textures, change rendering, or change synchronization/pacing. `LARECOMP_DEPTH_PROBE=1` enables it; unset or `0` disables
-it. The environment is read once. It is Metal-only; shader metadata and the translator are unchanged.
+it. The environment is read once. It is Metal-only. The separately opt-in experiment and its rejection diagnostics
+are documented in [depth-no-fs-diag.md](depth-no-fs-diag.md); enabling the probe alone does not enable omission.
 
 From the repository root, run the already built executable normally:
 
 ```sh
-LARECOMP_DEPTH_PROBE=1 LARECOMP_LOG_PACE=1 ./build/lasrecomp
+LARECOMP_DEPTH_PROBE=1 LARECOMP_LOG_PACE=1 ./build/lasrecomp > /tmp/lasrecomp-depth-probe.log 2>&1
 ```
 
 Choose the existing installed game and save as usual. Do not change resolution or other graphics settings between
 baseline/probe comparisons. For the M1 benchmark, keep Original 16:9, Match display and AA Off, and compare the same
-Key Cavern room/camera/actions. The regular `lasrecomp.log` in the configured data folder contains the probe lines;
-the runtime handles logging, so no shell redirection is needed. This command does not select a macOS display mode.
+Key Cavern room/camera/actions. The development executable preserves stdout/stderr, so this command captures its
+valid log in `/tmp/lasrecomp-depth-probe.log`. A separate installed-app `lasrecomp.log` can belong to another process
+and must not be substituted for this capture. This command does not select a macOS display mode.
 
 ## Counts and reporting
 
@@ -51,16 +53,17 @@ Periodic logging still has overhead: compare runs with the probe off/on before t
 - `memory`: known global stores or any image resource. Image metadata does not distinguish reads from writes, so
   image reads are excluded too.
 - `msaa`: actual depth attachment sample count greater than one.
-- `coverage`: alpha-to-coverage is enabled.
+- `coverage`: alpha-to-coverage is enabled or the fragment header declares sample-mask output.
 - `unknown`: missing/failed/non-fragment translation metadata, malformed resource counts/types or constant-buffer
   masks, bindless resources, GLSL-only mapped memory, unexpected fragment point-size output, non-2D depth targets,
   invalid color-slot count, or missing depth dimensions/sample count.
 - `gmem_read`: global memory is read without a reported store. These draws are conservatively excluded separately
   from known side effects; a future optimization may prove some safe.
 
-`ShaderInfo` has no general sample-mask/coverage-output or complete side-effect certification. The translator itself
-notes that sample-mask output is not translated. This probe reads the current flags; it neither parses shader source
-nor strengthens that contract. Successful translation does not prove that all future instruction effects are tracked.
+`ShaderInfo` now records the header's sample-mask output and a separate narrow MSL omission certificate. This probe
+reads the coverage flag but intentionally does not require that certificate. It remains an opportunity count and does
+not apply the experiment's stencil, depth-write, declared-slot or depth-view restrictions. Successful translation
+alone does not prove that every future instruction effect is tracked.
 Texture allocation size alone does not establish that a shadow pass is expensive. Cold pipeline preparation may
 reduce completed counts; measure warmed gameplay and exclude menus/transitions. No shader code or assets are logged.
 
@@ -74,6 +77,7 @@ If `potential` stays zero or negligible in warmed Key Cavern frames, do not impl
 substantial and concentrated in recurring depth targets, first inspect GPU pass timing using available profiling
 tools. Counts alone cannot estimate saved milliseconds. The low-mode benchmark needs roughly 1.82 ms reduction from
 its reported 16.82 ms median to the pacer's 15 ms release threshold, and roughly 2.32 ms to reach a 14.5 ms target;
-tail latency also needs improvement. Only a separately approved, guarded fragment-elimination A/B experiment could
-establish that gain and validate foliage cutouts, shadows, stencil, depth-output shaders, particles and transitions.
+tail latency also needs improvement. The opt-in fragment-elimination experiment has not demonstrated a benefit:
+the initial A/B capture reported zero omissions. The rejection diagnostics must explain that before another
+performance A/B test can establish a gain and validate foliage, shadows, stencil, depth output and transitions.
 Keep the production pacer, fences, overlap snapshots, write watches and exposure-state preservation enabled.

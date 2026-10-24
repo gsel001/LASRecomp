@@ -81,6 +81,7 @@ typedef struct {
     char error[256];        // set when translation fails
     bool writes_sample_mask; // fragment header coverage output (not emitted by the current translator)
     bool depth_omit_safe;    // only successful, audited MSL translation sets this; unknown/GLSL metadata stays false
+    uint64_t depth_omit_rejections; // diagnostic explanation only; never consulted by eligibility or pipeline selection
 } ShaderInfo;
 
 // Global memory (LDG/STG) is addressed through one buffer that wraps the guest heap.
