@@ -74,7 +74,7 @@ jobs:
 
   macos:
     needs: check
-    if: needs.check.outputs.skip != 'true'
+    if: false  # (test-intel-black-1: Windows only)
     runs-on: macos-15  # (arm64; the app's minimum is macOS 15)
     steps:
       - uses: actions/checkout@v4
@@ -207,7 +207,7 @@ jobs:
   # x86-64 machine building the aarch64 AppImage).
   linux:
     needs: check
-    if: needs.check.outputs.skip != 'true'
+    if: false  # (test-intel-black-1: Windows only)
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -284,7 +284,7 @@ jobs:
           gh release edit "$TAG" --notes-file new.md
 
   release:
-    needs: [check, macos, windows, linux]
+    needs: [check, windows]
     if: needs.check.outputs.skip != 'true'
     runs-on: ubuntu-24.04
     permissions:
@@ -304,7 +304,7 @@ jobs:
         run: |
           cd dist
           ls -la
-          [ "$(ls | wc -l)" = 4 ] || { echo "::error::expected 4 files"; exit 1; }
+          [ "$(ls | wc -l)" = 1 ] || { echo "::error::expected 1 file"; exit 1; }
           if [ "$EVENT" = release ]; then  # (published on GitHub: attach the files, the notes get the sha256 table)
             gh release view "$TAG" --json body -q .body | grep -v '^> The download files are being built' > ../body.md || true
             { cat ../body.md; echo; echo "| File | sha256 |"; echo "|---|---|"
