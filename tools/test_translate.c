@@ -2,7 +2,8 @@
 //
 //  1. MSL must not change: every program is translated by the current translate.c (key.glsl = 0) and by the
 //     reference MSL-only translator (an older translate.c compiled with old_* symbol names, see
-//     tools/test_translate.sh); the MSL text and all ShaderInfo fields must be identical.
+//     tools/test_translate.sh); the MSL text and legacy ShaderInfo fields must be identical. The appended
+//     coverage/certification metadata is checked by test_depth_no_fs.c instead.
 //  2. GLSL must compile: the same program with key.glsl = 1 is compiled in-process with shaderc (Vulkan 1.3) and
 //     the SPIR-V validated with SPIRV-Tools.
 //
@@ -183,7 +184,11 @@ static void gen_key(ShaderKey *k, int stage) {
 static bool same_info(const ShaderInfo *a, const ShaderInfo *b) {
     if ((a->msl == NULL) != (b->msl == NULL)) return false;
     if (a->msl && strcmp(a->msl, b->msl)) return false;
-    ShaderInfo x = *a, y = *b;
+    // Historical references allocate the older, shorter structure. Never read the appended probe certificate
+    // from them (nor compare its intentional metadata changes). The legacy prefix retains its original layout.
+    ShaderInfo x = {0}, y = {0};
+    memcpy(&x, a, offsetof(ShaderInfo, writes_sample_mask));
+    memcpy(&y, b, offsetof(ShaderInfo, writes_sample_mask));
     x.msl = y.msl = NULL;
     return !memcmp(&x, &y, sizeof x);
 }

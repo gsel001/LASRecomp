@@ -79,6 +79,8 @@ typedef struct {
     uint32_t local_mem;     // bytes of local memory
     uint32_t num_insts;
     char error[256];        // set when translation fails
+    bool writes_sample_mask; // fragment header coverage output (not emitted by the current translator)
+    bool depth_omit_safe;    // only successful, audited MSL translation sets this; unknown/GLSL metadata stays false
 } ShaderInfo;
 
 // Global memory (LDG/STG) is addressed through one buffer that wraps the guest heap.

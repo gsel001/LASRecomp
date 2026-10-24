@@ -21,6 +21,7 @@
 #include <string.h>
 
 #include "shader.h"
+#include "../depth_no_fs.h"
 
 uint64_t maxwell_gmem_base, maxwell_gmem_size;
 uint32_t maxwell_gmem_chunk_shift;  // 0: one buffer for the whole heap (GLSL; shader.h)
@@ -2246,6 +2247,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     if (stage == STAGE_FRAGMENT) {
         c->omap_target = *(const uint32_t *)(sph + 0x48);
         c->omap_depth = (*(const uint32_t *)(sph + 0x4C) >> 1) & 1;
+        info->writes_sample_mask = (*(const uint32_t *)(sph + 0x4C) & 1) != 0;
     }
     // find the end: the last EXIT followed by self-branch padding, or max_size
     size_t n = (max_size - (code - blob)) / 8;
@@ -2471,6 +2473,9 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     info->msl = s.buf;
     info->attr_mask = c->in_attr_mask;
     info->out_mask = stage == STAGE_FRAGMENT ? c->omap_target : c->out_attr_mask;
+    if (stage == STAGE_FRAGMENT)
+        info->depth_omit_safe = depth_no_fs_certify(info, *(const uint32_t *)sph,
+                                                  *(const uint32_t *)(sph + 0x4C), dbg);
     free(c->body.buf);
     free(c);
     return info;
