@@ -1301,6 +1301,21 @@ void backend_present_now(NvnTexture *t, uint64_t frame) {
         widescreen_present_crop(frame, shape, crop, &vx, &vy, &vw, &vh);
         widescreen_set_factor((float)shape);
         output_scale_log((unsigned long long)frame, dw, dh, &os);  // (diagnostics: [scale] on a change)
+        static int depth_diag = -1;
+        if (depth_diag < 0) { const char *e = getenv("LARECOMP_DEPTH_NO_FS_DIAG"); depth_diag = e && !strcmp(e, "1"); }
+        if (depth_diag) {
+            static uint64_t last;
+            uint64_t now = SDL_GetTicksNS();
+            if (!last || now - last >= 6000000000ull) {
+                last = now;
+                LOG("[depth-no-fs-diag] output frame %llu drawable %.0fx%.0f scale %.3fx%.3f allocation %.3fx%.3f "
+                    "source_texture %lux%lu fullscreen=%d aspect=%d resolution=%d aa=%d upscaler=%d\n",
+                    (unsigned long long)frame, dw, dh, os.sx, os.sy, os.ax, os.ay,
+                    (unsigned long)(b ? b->tex.width : 0), (unsigned long)(b ? b->tex.height : 0),
+                    (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0,
+                    g_settings.aspect, g_settings.res_mode, g_settings.antialias, g_settings.upscaler);
+            }
+        }
         extern void renderer_set_alloc_scale(float ax, float ay);
         renderer_set_alloc_scale((float)os.ax, (float)os.ay);
         renderer_set_scale((float)sx, (float)sy);

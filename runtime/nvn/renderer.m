@@ -20,6 +20,7 @@
 #include "slowframe.h"
 #include "depth_probe.h"
 #include "depth_no_fs.h"
+#include "depth_no_fs_diag.h"
 
 static id<MTLDevice> dev;
 static id<MTLCommandBuffer> cmdbuf;
@@ -57,6 +58,35 @@ static DepthProbe depth_probe;
 static uint64_t depth_probe_since;
 static uint32_t depth_probe_width, depth_probe_height, depth_probe_samples;
 static uint64_t depth_no_fs_draws, depth_no_fs_omitted, depth_no_fs_fallbacks;
+static DepthNoFsDiag depth_no_fs_diag;
+// Pipeline builds also run on preparation/Metal workers. Cumulative counters survive boot resets and are atomic
+// only at build events; the per-draw accounting above belongs solely to the render thread.
+enum { DND_BUILD_REQUEST, DND_BUILD_OK, DND_BUILD_FAIL, DND_BUILD_COUNT };
+static uint64_t depth_no_fs_builds[2][DND_BUILD_COUNT]; // [0] live draw, [1] preparation
+static uint64_t depth_no_fs_translations[3], depth_no_fs_cert_first[DND_COUNT], depth_no_fs_cert_overlap[DND_COUNT];
+static bool depth_no_fs_diag_on(void) {
+    static bool on;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ const char *e = getenv("LARECOMP_DEPTH_NO_FS_DIAG"); on = e && !strcmp(e, "1"); });
+    return on;
+}
+static void depth_no_fs_diag_build(bool preparation, int event) {
+    if (depth_no_fs_diag_on()) __atomic_fetch_add(&depth_no_fs_builds[preparation][event], 1, __ATOMIC_SEQ_CST);
+}
+static void depth_no_fs_diag_translation(const ShaderInfo *fs) {
+    if (!depth_no_fs_diag_on()) return;
+    uint64_t reasons = fs->depth_omit_rejections;
+    if (!fs->depth_omit_safe && !reasons) reasons = DND_BIT(DND_CERT_UNAVAILABLE);
+    if (reasons) __atomic_fetch_add(&depth_no_fs_cert_first[depth_no_fs_diag_first(reasons)], 1, __ATOMIC_SEQ_CST);
+    while (reasons) {
+        int i = __builtin_ctzll(reasons);
+        __atomic_fetch_add(&depth_no_fs_cert_overlap[i], 1, __ATOMIC_SEQ_CST);
+        reasons &= reasons - 1;
+    }
+    if (fs->msl && !fs->error[0]) __atomic_fetch_add(&depth_no_fs_translations[1], 1, __ATOMIC_SEQ_CST);
+    if (fs->depth_omit_safe) __atomic_fetch_add(&depth_no_fs_translations[2], 1, __ATOMIC_SEQ_CST);
+    __atomic_fetch_add(&depth_no_fs_translations[0], 1, __ATOMIC_SEQ_CST);
+}
 static bool depth_no_fs_on(void) {
     static bool on;
     static dispatch_once_t once;
@@ -74,8 +104,8 @@ static bool depth_probe_enabled(void) {
     return on != 0;
 }
 static void depth_probe_report(void) {
-    bool probe = depth_probe_enabled(), no_fs = depth_no_fs_on();
-    if (!probe && !no_fs) return;
+    bool probe = depth_probe_enabled(), no_fs = depth_no_fs_on(), diag = depth_no_fs_diag_on();
+    if (!probe && !no_fs && !diag) return;
     uint64_t now = plat_now_ns();
     if (!depth_probe_since) { depth_probe_since = now; return; }
     if (now - depth_probe_since < 5000000000ull) return;
@@ -99,6 +129,51 @@ static void depth_probe_report(void) {
             (unsigned long long)renderer_exec_frame(), (now - depth_probe_since) / 1e9,
             (unsigned long long)depth_no_fs_draws, (unsigned long long)depth_no_fs_omitted,
             (unsigned long long)depth_no_fs_fallbacks);
+    if (diag) {
+        const DepthNoFsDiag *p = &depth_no_fs_diag;
+        LOG("[depth-no-fs-diag] frame %llu interval %.1fs attempts=%llu evaluated=%llu eligible_evaluated=%llu "
+            "total=%llu depth_bound=%llu depth_only=%llu probe_potential=%llu entered=%llu certified=%llu eligible=%llu omitted=%llu "
+            "raw0_metal1=%llu potential_raw0_metal1=%llu\n",
+            (unsigned long long)renderer_exec_frame(), (now - depth_probe_since) / 1e9,
+            p->attempts, p->evaluated, p->eligible_evaluated, p->total, p->depth, p->depth_only,
+            p->potential, p->entered, p->certified, p->eligible, p->omitted, p->raw0_metal1, p->potential_raw0_metal1);
+        char reasons[1800];
+        depth_no_fs_diag_format(reasons, sizeof reasons, p->rejected);
+        LOG("[depth-no-fs-diag] rejected(first; completed draws): %s\n", reasons);
+        depth_no_fs_diag_format(reasons, sizeof reasons, p->potential_rejected);
+        LOG("[depth-no-fs-diag] probe_potential_rejected(first; subset of completed draws): %s\n", reasons);
+        depth_no_fs_diag_format(reasons, sizeof reasons, p->overlap);
+        LOG("[depth-no-fs-diag] depth_only_reasons(overlap): %s\n", reasons);
+        LOG("[depth-no-fs-diag] pipeline(interval encounters): pending=%llu failed=%llu fallback=%llu inconsistent=%llu\n",
+            p->pending, p->failed, p->fallback, p->inconsistent);
+        LOG("[depth-no-fs-diag] skipped(interval): pre_no_program=%llu pre_program_not_ready=%llu pre_other=%llu "
+            "post_pipeline=%llu post_other=%llu (pre_program subsets: missing_fs=%llu instruction_unknown=%llu)\n",
+            p->pre_no_program, p->pre_program, p->pre_other, p->post_pipeline, p->post_other,
+            p->pre_missing_fs, p->pre_unknown_instruction);
+        for (int prep = 0; prep < 2; prep++) {
+            // Read requests last: a completed build always had its request counted first.
+            uint64_t ok = __atomic_load_n(&depth_no_fs_builds[prep][DND_BUILD_OK], __ATOMIC_SEQ_CST);
+            uint64_t fail = __atomic_load_n(&depth_no_fs_builds[prep][DND_BUILD_FAIL], __ATOMIC_SEQ_CST);
+            uint64_t requested = __atomic_load_n(&depth_no_fs_builds[prep][DND_BUILD_REQUEST], __ATOMIC_SEQ_CST);
+            LOG("[depth-no-fs-diag] builds(cumulative %s): requested=%llu ok=%llu failed=%llu outstanding=%llu\n",
+                prep ? "preparation" : "live", requested, ok, fail, requested - ok - fail);
+        }
+        // Translation/preparation can overlap a report. These are cumulative event snapshots, not draw denominators.
+        uint64_t first[DND_COUNT], overlap[DND_COUNT];
+        for (int i = 0; i < DND_COUNT; i++) {
+            first[i] = __atomic_load_n(&depth_no_fs_cert_first[i], __ATOMIC_SEQ_CST);
+            overlap[i] = __atomic_load_n(&depth_no_fs_cert_overlap[i], __ATOMIC_SEQ_CST);
+        }
+        uint64_t msl = __atomic_load_n(&depth_no_fs_translations[1], __ATOMIC_SEQ_CST);
+        uint64_t certified = __atomic_load_n(&depth_no_fs_translations[2], __ATOMIC_SEQ_CST);
+        uint64_t translated = __atomic_load_n(&depth_no_fs_translations[0], __ATOMIC_SEQ_CST);
+        LOG("[depth-no-fs-diag] shader_translations(cumulative): total=%llu msl_ok=%llu certified=%llu\n", translated, msl, certified);
+        depth_no_fs_diag_format(reasons, sizeof reasons, first);
+        LOG("[depth-no-fs-diag] shader_cert_rejected(first; cumulative translations): %s\n", reasons);
+        depth_no_fs_diag_format(reasons, sizeof reasons, overlap);
+        LOG("[depth-no-fs-diag] shader_cert_reasons(overlap; cumulative translations): %s\n", reasons);
+        memset(&depth_no_fs_diag, 0, sizeof depth_no_fs_diag);
+    }
     depth_no_fs_draws = depth_no_fs_omitted = depth_no_fs_fallbacks = 0;
     memset(&depth_probe, 0, sizeof depth_probe);
     depth_probe_since = now;
@@ -212,7 +287,7 @@ void renderer_init(id<MTLDevice> d) {
     dev = d;
     if (!cache) cache = [NSMutableDictionary new];  // (kept: shader preparation may have run on the start screen)
     st_defaults();
-    if (depth_probe_enabled() || depth_no_fs_on()) depth_probe_since = plat_now_ns();
+    if (depth_probe_enabled() || depth_no_fs_on() || depth_no_fs_diag_on()) depth_probe_since = plat_now_ns();
 }
 
 static int g_passes_in_cb;  // render passes encoded into the open command buffer (chunked commits)
@@ -912,7 +987,7 @@ static void begin_pass(void) {
     if (chunk < 0) { const char *e = ENV("LARECOMP_CHUNK_PASSES"); chunk = e ? atoi(e) : 8; }
     if (chunk > 0 && cmdbuf && ++g_passes_in_cb >= chunk) renderer_submit();
     enc = [cb() renderCommandEncoderWithDescriptor:rp];
-    if (depth_probe_enabled()) {
+    if (depth_probe_enabled() || depth_no_fs_diag_on()) {
         // Read the descriptor already used by the real pass; never ask the texture cache to make a view for us.
         id<MTLTexture> dt = rp.depthAttachment.texture;
         depth_probe_width = (uint32_t)dt.width;
@@ -1645,6 +1720,7 @@ static bool translate_program(Prog *pr, const uint8_t *vcode, size_t vmax, const
     }
     fkey->vs_out_mask = pr->vi->out_mask;
     pr->fi = slow_translate(fcode, fmax, STAGE_FRAGMENT, fkey);
+    depth_no_fs_diag_translation(pr->fi);
     if (!pr->fi->msl) { LOG("[shader] FS translate failed: %s\n", pr->fi->error); pr->failed = true; return false; }
     if (getenv("LARECOMP_SAVE_MSL") && vaddr) {
         mkdir("build/msl", 0755);
@@ -3173,8 +3249,50 @@ static bool depth_no_fs_prepare(Prog *pr, const ShaderRec *r) {
     return depth_no_fs_eligible(pr->fi, &s);
 }
 
+// A separate observer mirrors the existing guards. Its output is never used to choose a pipeline; a disagreement
+// with the unchanged selector is reported as an inconsistency instead of changing the draw.
+static DepthNoFsDiagDecision depth_no_fs_diag_draw(Prog *pr, uint32_t mode, bool selected) {
+    static int nodt = -1;
+    if (nodt < 0) nodt = getenv("LARECOMP_NO_DEPTH_TEST") != NULL;
+    bool color = false, images = false;
+    for (int i = 0; i < st.rt.ncolor && i < 8; i++) if (st.rt.color[i]) color = true;
+    for (int i = 0; i < 8; i++) if (st.img[1][i]) images = true;
+    NvnTexture *d = st.rt.depth;
+    bool format = d && renderer_format_is_depth(d->format) && d->format != 0x31;
+    DepthNoFsDiagState s = {
+        .live = {.enabled = depth_no_fs_on(), .has_depth = format, .has_color = color,
+                 .samples = d ? d->samples : 0, .depth_test = st.ds[0] == 1, .depth_write = st.ds[1] == 1,
+                 .stencil = st.ds[3] != 0, .alpha_to_coverage = st.ms[0xC] != 0},
+        .depth_present = d != NULL, .depth_format = format, .target = d && d->target != 1,
+        .view = st.rt.has_dview != 0, .color_declared = st.rt.ncolor != 0,
+        .compare = st.ds[2] < 1 || st.ds[2] > 8, .depth_env = nodt != 0,
+        .images = images, .topology = shader_topo_class(mode) != 2
+    };
+    s.live.unknown = !d || s.target || s.view || s.color_declared || s.compare || s.depth_env || s.images || s.topology;
+    DepthProbeDraw probe = {
+        .fs = pr->fi, .width = depth_probe_width, .height = depth_probe_height, .samples = depth_probe_samples,
+        .has_color = color, .has_depth = format, .alpha_to_coverage = st.ms[0xC] != 0,
+        .unsupported = st.rt.ncolor < 0 || st.rt.ncolor > 8 || (d && d->target != 1)
+    };
+    bool depth_only = format && !color;
+    return (DepthNoFsDiagDecision){
+        .reasons = depth_no_fs_diag_rejections(pr->fi, &s), .depth = d != NULL, .depth_only = depth_only,
+        .potential = depth_only && depth_probe_exclusions(&probe) == 0,
+        .certified = pr->fi && pr->fi->depth_omit_safe, .entered = s.live.enabled, .eligible = selected,
+        .raw0_metal1 = d && d->samples == 0 && depth_probe_samples == 1
+    };
+}
+
+static void depth_no_fs_diag_program_skip(Prog *pr) {
+    depth_no_fs_diag.pre_program++;
+    if (!pr || !pr->fi) depth_no_fs_diag.pre_missing_fs++;
+    else if (pr->fi->depth_omit_rejections & DND_BIT(DND_INSTRUCTION_UNKNOWN)) depth_no_fs_diag.pre_unknown_instruction++;
+}
+
 static void draw(CmdRec *r, bool indexed) {
-    if (!st.program) { stat_skipped++; return; }
+    bool diag = depth_no_fs_diag_on();
+    if (diag) depth_no_fs_diag.attempts++;
+    if (!st.program) { if (diag) depth_no_fs_diag.pre_no_program++; stat_skipped++; return; }
     static bool logged_modes;
     if (!logged_modes) {
         logged_modes = true;
@@ -3188,7 +3306,7 @@ static void draw(CmdRec *r, bool indexed) {
     for (int i = 0; i < st.nattrib; i++) vkey.attr_kind[i] = (uint8_t)attr_kind(st.attrib[i] & 0xFF);
     for (int i = 0; i < st.rt.ncolor; i++) if (st.rt.color[i]) fkey.rt_kind[i] = (uint8_t)rt_kind(st.rt.color[i]->format);
     Prog *pr = get_program(st.program, &vkey, &fkey);
-    if (!pr || !pr->ready) { stat_skipped++; return; }
+    if (!pr || !pr->ready) { if (diag) depth_no_fs_diag_program_skip(pr); stat_skipped++; return; }
     {   // mirror mode (runtime/hle/mirror.c): the scene's composite into the window image is drawn mirrored - the
         // unblended full-screen draw sampling the scene image (the window images also serve as scratch
         // targets earlier in the frame: those draws sample much smaller images; the HUD after it blends)
@@ -3206,7 +3324,7 @@ static void draw(CmdRec *r, bool indexed) {
         if (mirror_draw(composite)) {  // (the vertex flip mirrors a composite drawn with uvs, the fragment one a
             vkey.flip_x = fkey.flip_x = true;  // composite reading pixel positions; get_program keys on vkey)
             pr = get_program(st.program, &vkey, &fkey);
-            if (!pr || !pr->ready) { stat_skipped++; return; }
+            if (!pr || !pr->ready) { if (diag) depth_no_fs_diag_program_skip(pr); stat_skipped++; return; }
         }
     }
     {   // Interiors/dungeons draw a 16:9 backdrop quad over the still-rendered overworld: frames that
@@ -3230,9 +3348,9 @@ static void draw(CmdRec *r, bool indexed) {
                     while (*p == ',') p++;
                 }
             }
-            for (int i = 0; i < nskip; i++) if (last_hash == skip[i]) { stat_skipped++; return; }
+            for (int i = 0; i < nskip; i++) if (last_hash == skip[i]) { if (diag) depth_no_fs_diag.pre_other++; stat_skipped++; return; }
             extern bool pot_level_active(void);
-            if (last_hash == 0xa2177dbb72197bd9ull && pot_level_active()) { stat_skipped++; return; }  // item twinkle
+            if (last_hash == 0xa2177dbb72197bd9ull && pot_level_active()) { if (diag) depth_no_fs_diag.pre_other++; stat_skipped++; return; }  // item twinkle
         }
         g_cur_fs_hash = last_hash;
         extern void widescreen_backdrop_seen(uint64_t hash);
@@ -3282,6 +3400,12 @@ static void draw(CmdRec *r, bool indexed) {
     }
     // pipeline
     bool omit_fs = depth_no_fs_draw(pr, (uint32_t)r->x[0]);
+    DepthNoFsDiagDecision diagnostic;
+    if (diag) {
+        diagnostic = depth_no_fs_diag_draw(pr, (uint32_t)r->x[0], omit_fs);
+        depth_no_fs_diag.evaluated++;
+        depth_no_fs_diag.eligible_evaluated += omit_fs;
+    }
 pipeline_lookup: ;
     uint64_t phash = pipeline_state_hash(pr, omit_fs);
     uint32_t pslot = (uint32_t)(phash ^ (phash >> 29)) & (PIPE_TAB - 1);
@@ -3305,7 +3429,9 @@ pipeline_lookup: ;
             if (done) { [ready_pipes removeObjectForKey:pk]; cache[pk] = done; pobj = done; }
         }
         if (pobj == pending) {
+            if (diag && omit_fs) { depth_no_fs_diag.pending++; depth_no_fs_diag.fallback++; }
             if (omit_fs) { omit_fs = false; depth_no_fs_fallbacks++; goto pipeline_lookup; }
+            if (diag) depth_no_fs_diag.post_pipeline++;
             stat_skipped++; return;
         }
     }
@@ -3318,7 +3444,9 @@ pipeline_lookup: ;
     if (!pobj) {
         if (sync_shaders()) {
             NSError *err;
+            if (omit_fs) depth_no_fs_diag_build(false, DND_BUILD_REQUEST);
             pobj = TIMED_COMPILE(archive_render_pipeline(pd, &err));
+            if (omit_fs) depth_no_fs_diag_build(false, pobj ? DND_BUILD_OK : DND_BUILD_FAIL);
             if (!pobj) {
                 static int n;
                 if (n++ < 10) LOG("[metal] pipeline failed: %s\n", err.localizedDescription.UTF8String);
@@ -3331,22 +3459,29 @@ pipeline_lookup: ;
             double t0 = now_ms();
             static dispatch_queue_t pq;  // (off the render thread; through the binary archive)
             if (!pq) pq = dispatch_queue_create("larecomp.pipelines", DISPATCH_QUEUE_CONCURRENT);
+            bool diagnostic_build = omit_fs;
+            if (diagnostic_build) depth_no_fs_diag_build(false, DND_BUILD_REQUEST);
             dispatch_async(pq, ^{
                 NSError *e = nil;
                 id<MTLRenderPipelineState> ps = archive_render_pipeline(pd, &e);
+                if (diagnostic_build) depth_no_fs_diag_build(false, ps ? DND_BUILD_OK : DND_BUILD_FAIL);
                 if (!ps) { static int n; if (n++ < 10) LOG("[metal] pipeline failed: %s\n", e.localizedDescription.UTF8String); }
                 @synchronized(ready_pipes) { ready_pipes[k] = ps ? (id)ps : (id)[NSNull null]; }
                 @synchronized(cache) { stat_compile_ms += now_ms() - t0; }
                 slow_note_build("pipeline", (uint64_t)((now_ms() - t0) * 1e6));
                 __atomic_fetch_add(&stat_compiles, 1, __ATOMIC_RELAXED);
             });
+            if (diag && omit_fs) { depth_no_fs_diag.pending++; depth_no_fs_diag.fallback++; }
             if (omit_fs) { omit_fs = false; depth_no_fs_fallbacks++; goto pipeline_lookup; }
+            if (diag) depth_no_fs_diag.post_pipeline++;
             stat_skipped++;
             return;
         }
     }
     if (pobj == [NSNull null]) {
+        if (diag && omit_fs) { depth_no_fs_diag.failed++; depth_no_fs_diag.fallback++; }
         if (omit_fs) { omit_fs = false; depth_no_fs_fallbacks++; goto pipeline_lookup; }
+        if (diag) depth_no_fs_diag.post_pipeline++;
         stat_skipped++; return;
     }
     pipe = pobj;
@@ -3478,7 +3613,7 @@ pipeline_lookup: ;
     bind_textures(0, pr->vi);
     bind_textures(1, pr->fi);
     extern bool pets_hide_item_cursor(void);  // (the cursor is on the companion card: runtime/hle/pets.c)
-    if (draw_item_cursor && pets_hide_item_cursor()) { stat_skipped++; return; }
+    if (draw_item_cursor && pets_hide_item_cursor()) { if (diag) depth_no_fs_diag.post_other++; stat_skipped++; return; }
     vp_sx = pass_sx; vp_sy = pass_sy; vp_ox = 0; vp_oy = 0;
     if (fabsf(pass_sx - pass_sy) > 0.01f * pass_sy && st.rt.ncolor && renderer_texture_presented(st.rt.color[0])) {
         // Draws into the swapchain image: draws that sample the full-size reshaped scene (the final
@@ -3696,7 +3831,7 @@ pipeline_lookup: ;
             id<MTLBuffer> ib = expand_indices(mode, count, NULL, 0, first, &n);
             [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:n indexType:MTLIndexTypeUInt32 indexBuffer:ib
                      indexBufferOffset:0 instanceCount:inst baseVertex:0 baseInstance:base_inst];
-        } else { stat_skipped++; return; }
+        } else { if (diag) depth_no_fs_diag.post_other++; stat_skipped++; return; }
     } else {
         uint32_t itype = (uint32_t)r->x[1], count = (uint32_t)r->x[2];
         uint64_t iaddr = r->x[3];
@@ -3735,6 +3870,7 @@ pipeline_lookup: ;
     }
     }  // runs
     stat_draws++;
+    if (diag) depth_no_fs_diag_complete(&depth_no_fs_diag, &diagnostic, omit_fs);
     if (depth_no_fs_on()) { depth_no_fs_draws++; depth_no_fs_omitted += omit_fs; }
     if (depth_probe_enabled()) {
         bool color = false;
@@ -4349,6 +4485,7 @@ static dispatch_semaphore_t g_prep_slots;
 
 bool renderer_prepare_begin(void) {
     (void)depth_no_fs_on();
+    if (depth_no_fs_diag_on()) LOG("[depth-no-fs-diag] enabled=1 experimental=%d schema=1 (observer only)\n", depth_no_fs_on());
     if (!dev) {
         extern void *ui_metal_device(void);
         dev = (__bridge id<MTLDevice>)ui_metal_device();
@@ -4433,7 +4570,9 @@ bool renderer_prepare(const ShaderRec *r, const ShaderBlob *vsb, const ShaderBlo
             NSString *body = pipeline_key(pd, pr);
             if (prep_find_pipe(body)) continue;
             NSError *err = nil;
+            if (form) depth_no_fs_diag_build(true, DND_BUILD_REQUEST);
             id<MTLRenderPipelineState> ps = archive_render_pipeline(pd, &err);
+            if (form) depth_no_fs_diag_build(true, ps ? DND_BUILD_OK : DND_BUILD_FAIL);
             if (!ps) { static int n; if (n++ < 10) LOG("[shader] prepared pipeline failed: %s\n", err.localizedDescription.UTF8String); continue; }
             pthread_mutex_lock(&g_prep_lock);
             g_prep_pipes[body] = ps;
@@ -4444,9 +4583,10 @@ bool renderer_prepare(const ShaderRec *r, const ShaderBlob *vsb, const ShaderBlo
 }
 
 void renderer_reset(void) {
+    memset(&depth_no_fs_diag, 0, sizeof depth_no_fs_diag);
     depth_no_fs_draws = depth_no_fs_omitted = depth_no_fs_fallbacks = 0;
     memset(&depth_probe, 0, sizeof depth_probe);
-    depth_probe_since = depth_probe_enabled() || depth_no_fs_on() ? plat_now_ns() : 0;
+    depth_probe_since = depth_probe_enabled() || depth_no_fs_on() || depth_no_fs_diag_on() ? plat_now_ns() : 0;
     depth_probe_width = depth_probe_height = depth_probe_samples = 0;
     memset(td_tab, 0, sizeof td_tab);  // (recorded clears and depth guesses of the old boot's textures)
     td_pending = 0;

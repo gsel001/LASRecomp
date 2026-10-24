@@ -22,6 +22,7 @@
 
 #include "shader.h"
 #include "../depth_no_fs.h"
+#include "../depth_no_fs_diag.h"
 
 uint64_t maxwell_gmem_base, maxwell_gmem_size;
 uint32_t maxwell_gmem_chunk_shift;  // 0: one buffer for the whole heap (GLSL; shader.h)
@@ -1499,6 +1500,9 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         int size = (int)bits(w, 48, 3);
         int64_t off = sbits(w, 20, 24);
         c->info->uses_gmem = true;
+        // Diagnostic only: MSL's legacy uses_gmem_store flag is not set by this path. Preserve that contract and
+        // record the decoded fragment STG separately so the observer doesn't mislabel a known write as a read.
+        if (store && c->stage == STAGE_FRAGMENT) c->info->depth_omit_rejections |= DND_BIT(DND_GMEM_WRITE);
         char addr[256];
         if (a == RZ) sprintf(addr, "ulong(%lld)", (long long)off);
         else if (wide) sprintf(addr, "((ulong(%s) << 32 | ulong(%s)) + ulong(%lld))", R(a + 1), R(a), (long long)off);
@@ -2310,7 +2314,12 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     // (MSL: more textures than sampler slots take a slot table, at a buffer index the vertex stage's streams use)
     if (!c->glsl && stage == STAGE_VERTEX && info->ntex > MSL_MAX_SAMPLERS)
         fail(c, "%d textures in a vertex shader (Metal: %d samplers)", info->ntex, MSL_MAX_SAMPLERS);
-    if (c->fail) { free(c->body.buf); free(c); return info; }
+    if (c->fail) {
+        if (stage == STAGE_FRAGMENT)
+            info->depth_omit_rejections |= depth_no_fs_diag_certify(info, *(const uint32_t *)sph,
+                                                                 *(const uint32_t *)(sph + 0x4C), dbg);
+        free(c->body.buf); free(c); return info;
+    }
     if (c->glsl) return glsl_finish(c, any_branch, dbg);
 
     // ---------------------------------------------------------- MSL source
@@ -2473,9 +2482,12 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     info->msl = s.buf;
     info->attr_mask = c->in_attr_mask;
     info->out_mask = stage == STAGE_FRAGMENT ? c->omap_target : c->out_attr_mask;
-    if (stage == STAGE_FRAGMENT)
+    if (stage == STAGE_FRAGMENT) {
         info->depth_omit_safe = depth_no_fs_certify(info, *(const uint32_t *)sph,
                                                   *(const uint32_t *)(sph + 0x4C), dbg);
+        info->depth_omit_rejections |= depth_no_fs_diag_certify(info, *(const uint32_t *)sph,
+                                                             *(const uint32_t *)(sph + 0x4C), dbg);
+    }
     free(c->body.buf);
     free(c);
     return info;

@@ -1,7 +1,7 @@
 // Synthetic metadata and Maxwell programs only; no game shader binaries.
 #include <assert.h>
 #include <stdio.h>
-#include "../runtime/nvn/depth_no_fs.h"
+#include "../runtime/nvn/depth_no_fs_diag.h"
 
 static int cases;
 #define CHECK(x) do { assert(x); cases++; } while (0)
@@ -64,31 +64,42 @@ int main(void) {
 #undef META
     ShaderInfo *s = translate(HEADER, 0, EXIT, false, false);
     CHECK(s->msl && !s->error[0] && s->depth_omit_safe && depth_no_fs_eligible(s, &good));
+    CHECK(!s->depth_omit_rejections);
     maxwell_free(s);
     s = translate(HEADER, 1, EXIT, false, false);
-    CHECK(s->msl && s->writes_sample_mask && !s->depth_omit_safe); maxwell_free(s);
+    CHECK(s->msl && s->writes_sample_mask && !s->depth_omit_safe);
+    CHECK(s->depth_omit_rejections & DND_BIT(DND_COVERAGE)); maxwell_free(s);
     s = translate(HEADER, 2, EXIT, false, false);
-    CHECK(s->msl && s->writes_depth && !s->depth_omit_safe); maxwell_free(s);
+    CHECK(s->msl && s->writes_depth && !s->depth_omit_safe);
+    CHECK(s->depth_omit_rejections & DND_BIT(DND_DEPTH_OUTPUT)); maxwell_free(s);
     s = translate(HEADER, 4, EXIT, false, false);
-    CHECK(s->msl && !s->depth_omit_safe); maxwell_free(s);
+    CHECK(s->msl && !s->depth_omit_safe);
+    CHECK(s->depth_omit_rejections & DND_BIT(DND_CERT_OUTPUT_RESERVED)); maxwell_free(s);
     s = translate(HEADER | (1u << 15), 0, EXIT, false, false);
-    CHECK(s->msl && !s->depth_omit_safe); maxwell_free(s);
+    CHECK(s->msl && !s->depth_omit_safe);
+    CHECK(s->depth_omit_rejections & DND_BIT(DND_CERT_KILL)); maxwell_free(s);
     s = translate(HEADER | (1u << 16), 0, EXIT, false, false);
-    CHECK(s->msl && !s->depth_omit_safe); maxwell_free(s);
+    CHECK(s->msl && !s->depth_omit_safe);
+    CHECK(s->depth_omit_rejections & DND_BIT(DND_CERT_STORE)); maxwell_free(s);
     s = translate(HEADER, 0, UINT64_C(0xe330000000070000), false, false); // KIL
-    CHECK(s->msl && s->uses_discard && !s->depth_omit_safe); maxwell_free(s);
+    CHECK(s->msl && s->uses_discard && !s->depth_omit_safe);
+    CHECK(s->depth_omit_rejections & DND_BIT(DND_DISCARD)); maxwell_free(s);
     for (int store = 0; store < 2; store++) {
         uint64_t op = (store ? UINT64_C(0xeed8000000000000) : UINT64_C(0xeed0000000000000)) |
                       (7ull << 16) | (255ull << 8) | (4ull << 48);
         s = translate(HEADER, 0, op, false, false); // STG/LDG (including MSL's unreported store flag)
-        CHECK(s->msl && s->uses_gmem && !s->depth_omit_safe); maxwell_free(s);
+        CHECK(s->msl && s->uses_gmem && !s->depth_omit_safe);
+        CHECK(s->depth_omit_rejections & DND_BIT(DND_GMEM_READ));
+        CHECK(((s->depth_omit_rejections & DND_BIT(DND_GMEM_WRITE)) != 0) == (store != 0)); maxwell_free(s);
     }
     s = translate(HEADER, 0, UINT64_C(0x1230000000070000), false, false);
-    CHECK(s->error[0] && !s->depth_omit_safe); maxwell_free(s);
+    CHECK(s->error[0] && !s->depth_omit_safe);
+    CHECK(s->depth_omit_rejections & DND_BIT(DND_INSTRUCTION_UNKNOWN)); maxwell_free(s);
     s = translate(HEADER, 0, EXIT, true, false);
     CHECK(s->msl && !s->depth_omit_safe); maxwell_free(s);
     s = translate(HEADER, 0, EXIT, false, true);
-    CHECK(s->msl && !s->depth_omit_safe); maxwell_free(s);
+    CHECK(s->msl && !s->depth_omit_safe);
+    CHECK(s->depth_omit_rejections & DND_BIT(DND_CERT_DEBUG)); maxwell_free(s);
     printf("%d depth no-FS synthetic checks passed\n", cases);
     return 0;
 }
