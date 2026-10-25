@@ -1,3 +1,15 @@
+# Beta 6 follow-up integration — selected revision 5443be2
+
+Branch `codex/m1-beta6-update-5443be2` integrates upstream `5443be29ff788063fa23eba8080925390a71af0c` with the preserved M1 experiments. Upstream adds RomFS path/size validation, extra-file diagnostics and save-test stubs. Controller/pacer/settings/kernel remain unchanged relative to this selected upstream. Original development source modifications remain preserved.
+
+The local installation had six redundant RomFS root files: `main`, `main.npdm`, `rtld`, `sdk`, `subsdk0`, `subsdk1`. Each was SHA256-identical to its ExeFS original. At user request only those RomFS duplicates were removed. ExeFS originals, eight save files and settings retained their hashes. The remaining inventory matches all 3,836 expected RomFS path/size entries. No game resources, saves, binaries, local catalogs or raw evidence are published. Removing duplicates establishes neither a freeze cause nor a performance improvement.
+
+The arm64 app build, signature, upstream game-address/save tests and both profiling dry-runs passed. The internal upstream label remains `beta_5.2`; branch/revision identify the development build. An upstream reference check during publication found newer commit `77cfeb893f0faa7412d7aecee530d8ac2616f49f`; this publication matches the installed 5443be2 integration and does not claim newer code was validated. No game was launched.
+
+The initial preparation record follows as a historical milestone.
+
+---
+
 # Beta 6 integration record
 
 Verified live upstream `peiikai/LASRecomp:beta_6` at `4e9979c714095aaa0d6d2128a65601503eddd3ee`. Previous local development HEAD was `0be6fb2b0e4e2eb34d405ce103261695ddd3b5fd`, based on an earlier Beta 6 (`7952364`), not Beta 5.2. Between that base and selected upstream: 74 commits including merges, 47 changed files (+2445/-624). The requested Beta 6 line is retained.
