@@ -1,5 +1,8 @@
 # M1 Metal depth omission: rejection investigation
 
+This is the historical instrumentation report for `0be6fb2`. The later sample/view proof, activated gameplay
+results and fixed-Match A/B helper are documented in [depth-no-fs-ab.md](depth-no-fs-ab.md).
+
 This change instruments the existing opt-in experiment. It does **not** relax eligibility or change shader text,
 pipeline selection, texture allocation, storage snapshots, CPU/GPU overlap, synchronization, frame pacing, Dynamic
 resolution, or gameplay. The default renderer remains the default. No in-game visual verification or speedup is claimed.

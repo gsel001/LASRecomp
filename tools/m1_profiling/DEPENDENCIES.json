@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "runtime": "Python 3.10+ stdlib; macOS with installed Xcode for real preflight/capture",
+  "isolation_version": 1,
+  "isolation_origin": "Discovery/copy adapted from collector SHA256 77a0200c01921c9c44905de1903a3dc11bcbada778d951177fbca13c25cf3ec8; external collector no longer imported",
+  "files": {
+    "profile.py": "f037fa80e3e8d90de02f3b04af997ef607bf9aab090299325df77ab71fff33c0",
+    "analyze.py": "582265e99afdcf2f6b3fc50e6de2dd895a178d247fe4a965276a36efe0fc8fc4",
+    "isolation.py": "87fb8784d41eecfd7c1404170ac4db956dcddd3b519c25527a9d10cc4788d356",
+    "privacy.py": "9cc4b53fc7789132886632f910115ebef61d985bb4b1bf0c27f01b666ecc9a98",
+    "setup_check.py": "e60b0adb3195505d518cc5c4f12b0c82c137523f3c2ab475858f230984ccc3b7",
+    "mock_recorder.py": "a69efdcde357c73336390a198a9ed361d69b25d122502b4a8aade6ad8f39463c",
+    "test_profiling.py": "4be527a4c78210e5e75ba7f32c1e6e3741be55af5e20f941bd3b06e61455dba3",
+    "test_audit.py": "d2df44f116a9b5eb196495a73a914ba7591bb1d9f0078cb1c7f42674843604e7",
+    "validate_tools.py": "a31eb94383cbbb241fdca8d0ee93351373eb14d804b414a9c677b79b13b0085c",
+    "tool_probe.m": "14792249583a08bbe3c78ae07b0e810b052655b56ef1c2b9bcde9fa4ff948ca8",
+    "package_review.py": "72a53e4955bf6d648dc67bd79b57027db7cb2fe83c953be9dc4889b9cd0ba62d",
+    "dynamic_observe.py": "392ae0fb39c6f1be08e07b200864caa517859806b344cbe04e71bac3ba7171df",
+    "dynamic_log.py": "4e81d88f5065ff1502b5cd3ddb47aab07cdc50d978ee4013fa31aa4dfdfb3217",
+    "test_dynamic.py": "c09cdf0b8b9b67ca872a61fedf22f1cec5f77df89539fd4f5655852c3ba99565",
+    "recovery.py": "c9469e009926ee1dccae036a6255a9c8405e289821d9b4ee6266066544f6a20e",
+    "test_recovery.py": "1cc498ca6946d109361b186415f3663d2b3067cc9feb936ebc88a285e708771a",
+    "hang_watch.py": "0f67bfe76a257f0daaad77a863eca20c6acb8617ce591df93e03e321756eb1a0",
+    "test_hang_watch.py": "47dfbbe23049951104eb2b5d66fedd7cd6b37fcb4ee45598a4c86cf88fe13348",
+    "publication_guard.py": "9a1481f7fdb696c97d7b02b499d129626a6df514c1c546b727593045a0aa4cdc",
+    "Capture LASRecomp Hang.command": "ce2848d8e5787a5338309c6531ffe5aecfd6b69be90bef55ea04f13f2821ebe4"
+  }
+}

@@ -97,7 +97,7 @@ static inline uint64_t depth_no_fs_diag_rejections(const ShaderInfo *fs, const D
 
 typedef struct {
     uint64_t reasons;
-    bool depth, depth_only, potential, certified, entered, eligible, raw0_metal1;
+    bool depth, depth_only, potential, certified, entered, eligible, raw0_metal1, view_equivalent, safe_without_switch;
 } DepthNoFsDiagDecision;
 
 typedef struct {
@@ -107,6 +107,7 @@ typedef struct {
     uint64_t pre_no_program, pre_program, pre_other, pre_missing_fs, pre_unknown_instruction;
     uint64_t post_pipeline, post_other;
     uint64_t raw0_metal1, potential_raw0_metal1;
+    uint64_t potential_view_equivalent, potential_safe;
 } DepthNoFsDiag;
 
 static inline int depth_no_fs_diag_first(uint64_t reasons) {
@@ -118,6 +119,8 @@ static inline void depth_no_fs_diag_complete(DepthNoFsDiag *p, const DepthNoFsDi
     p->certified += d->certified; p->entered += d->entered; p->eligible += d->eligible; p->omitted += omitted;
     p->raw0_metal1 += d->depth_only && d->raw0_metal1;
     p->potential_raw0_metal1 += d->potential && d->raw0_metal1;
+    p->potential_view_equivalent += d->potential && d->view_equivalent;
+    p->potential_safe += d->potential && d->safe_without_switch;
     bool mismatch = d->eligible != (d->reasons == 0) || (omitted && !d->eligible);
     p->inconsistent += mismatch;
     int first = d->eligible ? DND_PASS : d->reasons ? depth_no_fs_diag_first(d->reasons) : DND_INCONSISTENT;

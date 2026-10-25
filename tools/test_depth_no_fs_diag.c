@@ -91,6 +91,11 @@ int main(void) {
     CHECK(p.inconsistent == 1 && p.rejected[DND_INCONSISTENT] == 1);
     d.eligible = true; d.reasons = DND_BIT(DND_STENCIL); depth_no_fs_diag_complete(&p, &d, true);
     CHECK(p.inconsistent == 2 && p.eligible == 3 && p.omitted == 2);
+    DepthNoFsDiag baseline = {0};
+    DepthNoFsDiagDecision safe_off = {.depth = true, .depth_only = true, .potential = true,
+        .view_equivalent = true, .safe_without_switch = true, .reasons = DND_BIT(DND_DISABLED)};
+    depth_no_fs_diag_complete(&baseline, &safe_off, false);
+    CHECK(baseline.potential_view_equivalent == 1 && baseline.potential_safe == 1 && !baseline.eligible && !baseline.omitted);
     uint64_t counts[DND_COUNT] = {0}; char text[1800], tiny[8];
     depth_no_fs_diag_format(text, sizeof text, counts); CHECK(!strcmp(text, "none"));
     counts[DND_COLOR_DECLARED] = UINT64_C(5000000000); counts[DND_CERT_VERSION] = 9;

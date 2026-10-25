@@ -36,7 +36,7 @@ def metrics(samples):
             "p95_sample": values[math.ceil(len(values) * .95) - 1]}
 
 
-def summarize(log):
+def summarize(log, expected_experimental=1, expected_drawable="2048x1280"):
     """Only run.log is authoritative. Never consult an installed app's log or invent missing counters."""
     intervals, outputs, scale_lines, settings_lines, builds = [], [], [], [], {}
     fps = defaultdict(list)
@@ -103,8 +103,8 @@ def summarize(log):
     warnings = []
     if not enabled:
         warnings.append("Missing diagnostic enabled banner: executable may lack the new instrumentation.")
-    if experimental != 1:
-        warnings.append("Experimental=1 was not confirmed in this process output.")
+    if experimental != expected_experimental:
+        warnings.append(f"Experimental={expected_experimental} was not confirmed in this process output.")
     if not intervals:
         warnings.append("No diagnostic intervals; no rejection or omission measurements available.")
     sums, first, potential_first, overlap, pipeline = Counter(), Counter(), Counter(), Counter(), Counter()
@@ -135,8 +135,8 @@ def summarize(log):
         warnings.append("No actual drawable/settings snapshots available.")
     else:
         final = outputs[-1]
-        if "drawable 2048x1280 " not in final["text"]:
-            warnings.append("Final drawable differs from the expected 2048x1280; consult output snapshots.")
+        if f"drawable {expected_drawable} " not in final["text"]:
+            warnings.append(f"Final drawable differs from the expected {expected_drawable}; consult output snapshots.")
         expected = {"fullscreen": 1, "aspect": 1, "resolution": 0, "aa": 0}
         if any(final["settings"].get(k) != v for k, v in expected.items()):
             warnings.append("Final actual fullscreen/aspect/resolution/AA differs from the requested settings.")

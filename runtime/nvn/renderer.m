@@ -21,6 +21,7 @@
 #include "depth_probe.h"
 #include "depth_no_fs.h"
 #include "depth_no_fs_diag.h"
+#include "depth_attachment.h"
 
 static id<MTLDevice> dev;
 static id<MTLCommandBuffer> cmdbuf;
@@ -57,6 +58,7 @@ static char stats_text[320];
 static DepthProbe depth_probe;
 static uint64_t depth_probe_since;
 static uint32_t depth_probe_width, depth_probe_height, depth_probe_samples;
+static DepthAttachment depth_attachment;
 static uint64_t depth_no_fs_draws, depth_no_fs_omitted, depth_no_fs_fallbacks;
 static DepthNoFsDiag depth_no_fs_diag;
 // Pipeline builds also run on preparation/Metal workers. Cumulative counters survive boot resets and are atomic
@@ -133,10 +135,11 @@ static void depth_probe_report(void) {
         const DepthNoFsDiag *p = &depth_no_fs_diag;
         LOG("[depth-no-fs-diag] frame %llu interval %.1fs attempts=%llu evaluated=%llu eligible_evaluated=%llu "
             "total=%llu depth_bound=%llu depth_only=%llu probe_potential=%llu entered=%llu certified=%llu eligible=%llu omitted=%llu "
-            "raw0_metal1=%llu potential_raw0_metal1=%llu\n",
+            "raw0_metal1=%llu potential_raw0_metal1=%llu potential_view_equivalent=%llu potential_safe=%llu\n",
             (unsigned long long)renderer_exec_frame(), (now - depth_probe_since) / 1e9,
             p->attempts, p->evaluated, p->eligible_evaluated, p->total, p->depth, p->depth_only,
-            p->potential, p->entered, p->certified, p->eligible, p->omitted, p->raw0_metal1, p->potential_raw0_metal1);
+            p->potential, p->entered, p->certified, p->eligible, p->omitted, p->raw0_metal1, p->potential_raw0_metal1,
+            p->potential_view_equivalent, p->potential_safe);
         char reasons[1800];
         depth_no_fs_diag_format(reasons, sizeof reasons, p->rejected);
         LOG("[depth-no-fs-diag] rejected(first; completed draws): %s\n", reasons);
@@ -848,8 +851,9 @@ bool renderer_view_needs_format_flag(MTLPixelFormat base, MTLPixelFormat view) {
 }
 
 static id<MTLTexture> view_texture(NvnTexture *t, const NvnTextureView *v, bool has_view, bool render,
-                                   id<MTLBlitCommandEncoder> blit) {
+                                   id<MTLBlitCommandEncoder> blit, id<MTLTexture> __strong *base_out) {
     id<MTLTexture> base = renderer_texture(t, blit, render);
+    if (base_out) *base_out = base;
     if (!has_view || !v->setmask) return base;
     MTLPixelFormat pf = (v->setmask & 4) ? renderer_pixel_format(v->format) : base.pixelFormat;
     if (!mtl_view_compatible(base.pixelFormat, pf) ||  // (see mtl_view_compatible: the base format instead)
@@ -896,12 +900,14 @@ static void begin_pass(void) {
     end_pass();
     st.rt_dirty = false;
     MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+    bool inspect_depth = depth_no_fs_on() || depth_no_fs_diag_on();
+    if (inspect_depth) memset(&depth_attachment, 0, sizeof depth_attachment);
     int w = 0, h = 0;
     for (int i = 0; i < st.rt.ncolor; i++) {
         NvnTexture *t = st.rt.color[i];
         if (!t) continue;
         renderer_mark_gpu_owned(t);
-        id<MTLTexture> tex = view_texture(t, &st.rt.cview[i], st.rt.has_cview[i], true, nil);
+        id<MTLTexture> tex = view_texture(t, &st.rt.cview[i], st.rt.has_cview[i], true, nil, NULL);
         rp.colorAttachments[i].texture = tex;
         rp.colorAttachments[i].loadAction = MTLLoadActionLoad;
         // reshaped output: areas outside the game's 16:9 drawing (interiors, fades) start black each frame
@@ -927,7 +933,8 @@ static void begin_pass(void) {
     }
     if (st.rt.depth) {
         renderer_mark_gpu_owned(st.rt.depth);
-        id<MTLTexture> tex = view_texture(st.rt.depth, &st.rt.dview, st.rt.has_dview, true, nil);
+        id<MTLTexture> base = nil;
+        id<MTLTexture> tex = view_texture(st.rt.depth, &st.rt.dview, st.rt.has_dview, true, nil, inspect_depth ? &base : NULL);
         TexDefer *e = td_pending ? td_get(st.rt.depth, false) : NULL;
         bool has_d = renderer_format_is_depth(st.rt.depth->format) && st.rt.depth->format != 0x31;
         bool has_s = renderer_format_has_stencil(st.rt.depth->format);
@@ -944,6 +951,7 @@ static void begin_pass(void) {
             rp.stencilAttachment.clearStencil = clr_s ? e->sval : 0;
             rp.stencilAttachment.storeAction = MTLStoreActionStore;
         }
+        if (inspect_depth) depth_attachment = depth_attachment_observe(base, rp, renderer_pixel_format(st.rt.depth->format));
         if (e && e->clear_on) { e->clear_on = false; td_pending--; stat_clears_as_load++; }
         if (!w) { renderer_texture_scale(st.rt.depth, &pass_sx, &pass_sy); w = (int)tex.width; h = (int)tex.height; }
     }
@@ -1062,7 +1070,7 @@ static id<MTLLibrary> clear_lib(int index) {
 
 static void attachment_formats(MTLRenderPipelineDescriptor *pd) {
     for (int i = 0; i < st.rt.ncolor; i++)
-        if (st.rt.color[i]) pd.colorAttachments[i].pixelFormat = view_texture(st.rt.color[i], &st.rt.cview[i], st.rt.has_cview[i], true, nil).pixelFormat;
+        if (st.rt.color[i]) pd.colorAttachments[i].pixelFormat = view_texture(st.rt.color[i], &st.rt.cview[i], st.rt.has_cview[i], true, nil, NULL).pixelFormat;
     if (st.rt.depth) {
         MTLPixelFormat pf = renderer_pixel_format(st.rt.depth->format);
         if (renderer_format_is_depth(st.rt.depth->format) && st.rt.depth->format != 0x31) pd.depthAttachmentPixelFormat = pf;
@@ -2001,7 +2009,7 @@ static id<MTLTexture> apply_swizzle(id<MTLTexture> tex, NvnTexture *t, const Nvn
 static id<MTLTexture> sampled_texture(NvnTexture *t, const NvnTextureView *v, bool has_view, int want_type) {
     // uploads (if the CPU-side contents changed) go into their own command buffer, committed before
     // the current one so they land first
-    id<MTLTexture> tex = view_texture(t, v, has_view, false, nil);
+    id<MTLTexture> tex = view_texture(t, v, has_view, false, nil, NULL);
     tex = apply_swizzle(tex, t, v, has_view);
     MTLTextureType want = mtl_type_for(want_type);
     if (tex.textureType != want && tex.textureType != MTLTextureType2DMultisample) {
@@ -3219,7 +3227,8 @@ static id prep_find_pipe(NSString *body) {
 }
 
 // ShaderRec has no depth/stencil-test state. Preparation builds both forms when the static shape permits it;
-// only the live draw can select the no-FS form. Views, stencil, invalid compare modes and resource images fall back.
+// only the live draw can select the no-FS form. Only proven base-equivalent views and single-sample attachments
+// are admitted; stencil, invalid compare modes and resource images still fall back.
 static bool depth_no_fs_draw(Prog *pr, uint32_t mode) {
     if (!depth_no_fs_on()) return false;
     static int nodt = -1;
@@ -3230,10 +3239,13 @@ static bool depth_no_fs_draw(Prog *pr, uint32_t mode) {
     NvnTexture *d = st.rt.depth;
     DepthNoFsState s = {
         .enabled = true, .has_depth = d && renderer_format_is_depth(d->format) && d->format != 0x31,
-        .has_color = color, .samples = d ? d->samples : 0,
+        // With zero declared colors attachment_formats() leaves the pipeline's default sample count at one.
+        // rec_from_state() and preparation already normalize raw 0/1 to one. Only normalize the live count when
+        // the actual pass agrees; no descriptor, cache identity, or GPU synchronization is changed here.
+        .has_color = color, .samples = d ? depth_attachment_samples(d->samples, depth_attachment.samples, 1) : 0,
         .depth_test = st.ds[0] == 1, .depth_write = st.ds[1] == 1, .stencil = st.ds[3] != 0,
         .alpha_to_coverage = st.ms[0xC] != 0,
-        .unknown = !d || d->target != 1 || st.rt.has_dview || st.rt.ncolor != 0 ||
+        .unknown = !depth_attachment_view(d, &st.rt.dview, st.rt.has_dview, &depth_attachment) || st.rt.ncolor != 0 ||
                    st.ds[2] < 1 || st.ds[2] > 8 || nodt ||
                    images || shader_topo_class(mode) != 2
     };
@@ -3261,10 +3273,11 @@ static DepthNoFsDiagDecision depth_no_fs_diag_draw(Prog *pr, uint32_t mode, bool
     bool format = d && renderer_format_is_depth(d->format) && d->format != 0x31;
     DepthNoFsDiagState s = {
         .live = {.enabled = depth_no_fs_on(), .has_depth = format, .has_color = color,
-                 .samples = d ? d->samples : 0, .depth_test = st.ds[0] == 1, .depth_write = st.ds[1] == 1,
+                 .samples = d ? depth_attachment_samples(d->samples, depth_attachment.samples, 1) : 0,
+                 .depth_test = st.ds[0] == 1, .depth_write = st.ds[1] == 1,
                  .stencil = st.ds[3] != 0, .alpha_to_coverage = st.ms[0xC] != 0},
         .depth_present = d != NULL, .depth_format = format, .target = d && d->target != 1,
-        .view = st.rt.has_dview != 0, .color_declared = st.rt.ncolor != 0,
+        .view = !depth_attachment_view(d, &st.rt.dview, st.rt.has_dview, &depth_attachment), .color_declared = st.rt.ncolor != 0,
         .compare = st.ds[2] < 1 || st.ds[2] > 8, .depth_env = nodt != 0,
         .images = images, .topology = shader_topo_class(mode) != 2
     };
@@ -3275,11 +3288,14 @@ static DepthNoFsDiagDecision depth_no_fs_diag_draw(Prog *pr, uint32_t mode, bool
         .unsupported = st.rt.ncolor < 0 || st.rt.ncolor > 8 || (d && d->target != 1)
     };
     bool depth_only = format && !color;
+    DepthNoFsState shadow = s.live;
+    shadow.enabled = true; // observation only: quantify the same safe opportunity in both A/B processes
     return (DepthNoFsDiagDecision){
         .reasons = depth_no_fs_diag_rejections(pr->fi, &s), .depth = d != NULL, .depth_only = depth_only,
         .potential = depth_only && depth_probe_exclusions(&probe) == 0,
         .certified = pr->fi && pr->fi->depth_omit_safe, .entered = s.live.enabled, .eligible = selected,
-        .raw0_metal1 = d && d->samples == 0 && depth_probe_samples == 1
+        .raw0_metal1 = d && d->samples == 0 && depth_probe_samples == 1,
+        .view_equivalent = !s.view, .safe_without_switch = depth_no_fs_eligible(pr->fi, &shadow)
     };
 }
 
@@ -4076,7 +4092,7 @@ static void copy_texture(const TexRefRec *src, const TexRefRec *dst, uint64_t fl
     end_pass();
     id<MTLTexture> s = sampled_texture(st_, &src->view, src->has_view, TEXTYPE_2D);
     renderer_mark_gpu_owned(dt);
-    id<MTLTexture> d = view_texture(dt, &dst->view, dst->has_view, true, nil);
+    id<MTLTexture> d = view_texture(dt, &dst->view, dst->has_view, true, nil, NULL);
     // a full copy into a swapchain image: the source is the frame's final framebuffer (UI is drawn there)
     extern void renderer_texture_mark_presented(NvnTexture *t);
     if (renderer_texture_presented(dt) && st_->width == dt->width && st_->height == dt->height)
@@ -4485,7 +4501,7 @@ static dispatch_semaphore_t g_prep_slots;
 
 bool renderer_prepare_begin(void) {
     (void)depth_no_fs_on();
-    if (depth_no_fs_diag_on()) LOG("[depth-no-fs-diag] enabled=1 experimental=%d schema=1 (observer only)\n", depth_no_fs_on());
+    if (depth_no_fs_diag_on()) LOG("[depth-no-fs-diag] enabled=1 experimental=%d schema=2 (observer only)\n", depth_no_fs_on());
     if (!dev) {
         extern void *ui_metal_device(void);
         dev = (__bridge id<MTLDevice>)ui_metal_device();
@@ -4588,6 +4604,7 @@ void renderer_reset(void) {
     memset(&depth_probe, 0, sizeof depth_probe);
     depth_probe_since = depth_probe_enabled() || depth_no_fs_on() || depth_no_fs_diag_on() ? plat_now_ns() : 0;
     depth_probe_width = depth_probe_height = depth_probe_samples = 0;
+    memset(&depth_attachment, 0, sizeof depth_attachment);
     memset(td_tab, 0, sizeof td_tab);  // (recorded clears and depth guesses of the old boot's textures)
     td_pending = 0;
     renderer_flush();
