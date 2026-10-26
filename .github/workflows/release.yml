@@ -111,6 +111,8 @@ jobs:
         run: make rando-helper && make gen-helper
       - name: Compiler for the player's machine
         run: tools/fetch_zig.sh
+      - name: macOS bundle symbol-provider regressions
+        run: python3 tools/test_macos_bundle.py
       - name: App and disk image
         run: make -j"$(sysctl -n hw.ncpu)" dmg
       # bundle_macos.sh checked the executable; here everything inside the app: no game code in any Mach-O, no
