@@ -6,12 +6,14 @@
 # machine (runtime/gamebuild.c): the generator helper (build/helper/lasgen), the compiler (build/zig, tools/fetch_zig.sh)
 # and the headers the code is compiled against (gamelib-src/). Ad-hoc signed. No game files, game code or fonts: the
 # app keeps those in ~/Library/Application Support/<bundle id> (runtime/paths.h).
+# Optional second argument: a new disposable output .app path (existing custom outputs are rejected).
 # MACOS_MIN=<x.y>: LSMinimumSystemVersion, and every Mach-O inside must be built for it or older (else it fails and
 # lists them); without it the newest minimum found inside is used.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 EXE=${1:-build/mac15/lasrecomp}
-APP="build/LAS Recomp.app"
+APP=${2:-"build/LAS Recomp.app"}
+if [ "$#" -ge 2 ] && [ -e "$APP" ]; then echo "output already exists: $APP" >&2; exit 1; fi
 DEPS=$PWD/build/deps
 BUNDLE_ID=$(sed -n 's/^#define RT_BUNDLE_ID "\(.*\)"/\1/p' runtime/paths.h)
 VERSION=$(sed -n 's/^#define LARECOMP_VERSION "\(.*\)"/\1/p' runtime/ui/launcher.mm)
@@ -51,42 +53,72 @@ cp third_party/fonts/DejaVu/LICENSE "$C/Resources/DejaVu-LICENSE.txt"
 
 # ---- dylibs: copy every non-system dependency, recursively; point all references at @rpath/<name>
 is_system() { case "$1" in /usr/lib/*|/System/*) return 0;; esac; return 1; }
-find_dep() {  # dep as referenced by (the original of) $2 -> a real file
+rpaths() { otool -l "$1" | awk '/LC_RPATH/ {getline; getline; sub(/^[ \t]*path /, ""); sub(/ \(offset [0-9]+\).*$/, ""); print}'; }
+expand_rpath() {
     case "$1" in
-    @rpath/*|@loader_path/*)
-        local n=${1#*/}
-        for d in "$(dirname "$2")" "$DEPS/lib" /opt/homebrew/lib; do [ -e "$d/$n" ] && { echo "$d/$n"; return; }; done
-        echo "cannot resolve $1 (from $2)" >&2; exit 1;;
-    *) echo "$1";;
+    @loader_path) dirname "$2";;
+    @loader_path/*) printf '%s/%s\n' "$(dirname "$2")" "${1#@loader_path/}";;
+    @executable_path) dirname "$EXE";;
+    @executable_path/*) printf '%s/%s\n' "$(dirname "$EXE")" "${1#@executable_path/}";;
+    /*) printf '%s\n' "$1";;
+    *) return 1;;
     esac
 }
-deps_of() { otool -L "$1" | tail -n +2 | awk '{print $1}' | grep -v "^$(otool -D "$1" | tail -n +2 | head -1)\$" || true; }
-origin() { local s; s="$(dirname "$1")/.$(basename "$1").src"; if [ -f "$s" ]; then cat "$s"; else echo "$1"; fi; }
+find_dep() {  # resolve against the source image before rewriting any load paths
+    local n d p
+    case "$1" in
+    @rpath/*)
+        n=${1#@rpath/}
+        while IFS= read -r p; do
+            d=$(expand_rpath "$p" "$2") || continue
+            [ -e "$d/$n" ] && { printf '%s\n' "$d/$n"; return; }
+        done < <(rpaths "$2"; [ "$2" = "$EXE" ] || rpaths "$EXE")
+        # Pinned dylibs can be colocated without their own LC_RPATH. Do not guess Homebrew.
+        for d in "$(dirname "$2")" "$DEPS/lib"; do
+            [ -e "$d/$n" ] && { printf '%s\n' "$d/$n"; return; }
+        done;;
+    @loader_path*|@executable_path*)
+        p=$(expand_rpath "$1" "$2")
+        [ -e "$p" ] && { printf '%s\n' "$p"; return; };;
+    /*) [ -e "$1" ] && { printf '%s\n' "$1"; return; };;
+    esac
+    echo "cannot resolve $1 (from $2)" >&2; return 1
+}
+deps_of() {
+    local id dep
+    id=$(otool -D "$1" | sed -n '2p')
+    while IFS= read -r dep; do
+        [ "$dep" = "$id" ] || printf '%s\n' "$dep"
+    done < <(otool -L "$1" | sed -n 's/^\t\(.*\) (compatibility version .*/\1/p')
+}
+origin() { [ "$1" = "$C/MacOS/lasrecomp" ] && { printf '%s\n' "$EXE"; return; }; local s; s="$(dirname "$1")/.$(basename "$1").src"; if [ -f "$s" ]; then cat "$s"; else echo "$1"; fi; }
 queue="$C/MacOS/lasrecomp"
 copied=" "
 while [ -n "$queue" ]; do
     f=${queue%%|*}; [ "$queue" = "$f" ] && queue= || queue=${queue#*|}
-    for dep in $(deps_of "$f"); do
+    while IFS= read -r dep; do
         is_system "$dep" && continue
         name=$(basename "$dep")
+        real=$(find_dep "$dep" "$(origin "$f")")
         if [[ "$copied" != *" $name "* ]]; then
-            real=$(find_dep "$dep" "$(origin "$f")")
             cp -L "$real" "$C/Frameworks/$name"
             chmod u+w "$C/Frameworks/$name"
             install_name_tool -id "@rpath/$name" "$C/Frameworks/$name" 2>/dev/null
             echo "$real" > "$C/Frameworks/.$name.src"
             copied+="$name "
             queue=${queue:+$queue|}$C/Frameworks/$name
+        elif ! cmp -s "$real" "$(origin "$C/Frameworks/$name")"; then
+            echo "conflicting source libraries named $name: $real and $(origin "$C/Frameworks/$name")" >&2
+            exit 1
         fi
         [ "$dep" = "@rpath/$name" ] || install_name_tool -change "$dep" "@rpath/$name" "$f" 2>/dev/null
-    done
+    done < <(deps_of "$f")
 done
 rm -f "$C/Frameworks"/.*.src
-rpaths() { otool -l "$1" | awk '/LC_RPATH/ {getline; getline; print $2}'; }
-for r in $(rpaths "$C/MacOS/lasrecomp"); do install_name_tool -delete_rpath "$r" "$C/MacOS/lasrecomp"; done
+while IFS= read -r r; do install_name_tool -delete_rpath "$r" "$C/MacOS/lasrecomp"; done < <(rpaths "$C/MacOS/lasrecomp")
 install_name_tool -add_rpath "@executable_path/../Frameworks" "$C/MacOS/lasrecomp"
 for f in "$C/Frameworks"/*.dylib; do  # (their own build rpaths, if any: point them at the bundle instead)
-    for r in $(rpaths "$f"); do install_name_tool -delete_rpath "$r" "$f"; done
+    while IFS= read -r r; do install_name_tool -delete_rpath "$r" "$f"; done < <(rpaths "$f")
     install_name_tool -add_rpath "@loader_path" "$f" 2>/dev/null || true
 done
 
@@ -137,4 +169,5 @@ while read -r f; do [ "$f" = "$C/MacOS/lasrecomp" ] || codesign -f -s - "$f" 2>/
 codesign -f -s - "$APP"
 codesign --verify --strict "$APP"
 if find "$APP" -name 'lasgame*' | grep . >/dev/null; then echo "game code inside $APP"; exit 1; fi
+python3 tools/validate_macos_bundle.py "$APP"
 echo "$APP: $(du -sh "$APP" | cut -f1), $(ls "$C/Frameworks" | wc -l | tr -d ' ') dylibs, macOS $MIN+"
