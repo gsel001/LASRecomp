@@ -31,9 +31,9 @@ const PlasticTheme &plastic_theme(void) {
         // khaki-gold inner edge; rows, buttons and tabs terracotta in a khaki-gold rim (cream text), the selection pale
         // gold in a lighter gold rim (dark brown text), Delete / warnings a muted red. The terracotta is a little
         // darker than the item screen's (#A57955) so cream text keeps 4.5:1.
-        t.panel = hex(0x433110, 0.98f);   // (the patches: panel <-> panel2, about #493812 on average)
-        t.panel2 = hex(0x4F4017, 0.98f);
-        t.inset = hex(0x3D3213, 0.96f);
+        t.panel = hex(0x433110, 0.78f);   // (the patches: panel <-> panel2, about #493812 on average)
+        t.panel2 = hex(0x4F4017, 0.78f);
+        t.inset = hex(0x3D3213, 0.72f);
         t.frame = hex(0x4F5231);
         t.frame_inner = hex(0xAA9B67);
         t.row = hex(0x836044);
@@ -60,7 +60,7 @@ const PlasticTheme &plastic_theme(void) {
         t.pill_gloss = 0.18f;  // (a soft sheen: a bright one washed out the cream text)
         t.edge = 0.08f;
         t.mottle = 150.0f;
-        t.dim = 0.62f;
+        t.dim = 0.45f;
         t.glare = 0.14f;
     }
     return t;
