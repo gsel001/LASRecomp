@@ -3168,6 +3168,27 @@ static const char *sc_src =
     "  }\n"
     "  return s;\n"
     "}\n"
+    // the height of the wide flat ground `step` pixels at a time along the screen's y from q (1e9: none) - the first
+    // two samples at the same height, then the same height again two and four times as far on (sc_fs: drifts)
+    "static float sc_flat(constant SF &w, depth2d<float> dt, texture2d<uint> sv, int2 q, int2 mx, float2 e, int step) {\n"
+    "  float yl = 1e9, yp = 1e9;\n"
+    "  int jl = 0;\n"
+    "  for (int j = 1; j <= 4 && yl > 1e8; j++) {\n"
+    "    int2 qq = clamp(q + int2(0, step * j), int2(0), mx);\n"
+    "    float dk = dt.read(uint2(qq));\n"
+    "    float y = dk < 0.99999 && !(sv.read(uint2(qq)).r & 0x80u) ? world_at(w, (float2(qq) + 0.5) * e, dk).y : 1e9;\n"
+    "    if (y < 1e8 && abs(y - yp) < 0.03) yl = min(y, yp), jl = j;\n"
+    "    yp = y;\n"
+    "  }\n"
+    "  if (yl > 1e8) return 1e9;\n"
+    "  for (int j = 2; j <= 4; j += 2) {\n"
+    "    int2 qq = clamp(q + int2(0, step * jl * j), int2(0), mx);\n"
+    "    float dk = dt.read(uint2(qq));\n"
+    "    float y = dk < 0.99999 ? world_at(w, (float2(qq) + 0.5) * e, dk).y : 1e9;\n"
+    "    if (abs(y - yl) > 0.07) return 1e9;\n"
+    "  }\n"
+    "  return yl;\n"
+    "}\n"
     "constant float2 sc_hex[6] = {float2(1.0, 0.0), float2(0.5, 0.866), float2(-0.5, 0.866), float2(-1.0, 0.0), float2(-0.5, -0.866), float2(0.5, -0.866)};\n"
     "constant float2 sc_ring[8] = {float2(0.924, 0.383), float2(0.383, 0.924), float2(-0.383, 0.924), float2(-0.924, 0.383),\n"
     "                              float2(-0.924, -0.383), float2(-0.383, -0.924), float2(0.383, -0.924), float2(0.924, -0.383)};\n"
@@ -3216,22 +3237,24 @@ static const char *sc_src =
     "  float rough = saturate((0.9 - flat) / 0.6);\n"
     "  float up = smoothstep(0.35, 0.85, n.y) * (1.0 - 0.45 * rough) * mix(0.6, 1.0, smoothstep(2.0, 4.5, float(nok)));\n"
     // drifts: the foot of anything upright (walls, rocks, tree trunks, the grass fringes along their bases) is
-    // buried - a pixel at most ~0.15 above the flat ground just in front of it takes snow whatever way it faces. The
-    // ground: down the screen from it (4 samples, the level's model only), the first two neighbours at the same
-    // height (a wall's own face drops between samples), and only the real ground - near the height the weather's
-    // probes found - not the top of a well, a fence rail or a roof's slats (those are raised: no drifts on them)
-    "  float yl = 1e9, yp = 1e9;\n"
+    // buried - a pixel 0-0.15 above the flat ground just in front of it takes snow whatever way it faces (never one
+    // below it: the inside of a well). The ground: down the screen from it (sc_flat: the level's model only), and only
+    // a wide flat - not the narrow top of a well's rim, a fence rail or a roof's slats (no drifts on those). Nothing
+    // here depends on the weather's probes: the same wherever the view is
     "  int down = int(rad * 1.5) * (w.flags.x > 0.5 ? -1 : 1);\n"  // (the depth's rows run up the screen when flipped)
-    "  for (int j = 1; j <= 4 && yl > 1e8; j++) {\n"
-    "    int2 qq = clamp(q + int2(0, down * j), int2(0), mx);\n"
-    "    float dk = dt.read(uint2(qq));\n"
-    "    float y = dk < 0.99999 && !(sv.read(uint2(qq)).r & 0x80u) ? world_at(w, (float2(qq) + 0.5) * e, dk).y : 1e9;\n"
-    "    if (y < 1e8 && abs(y - yp) < 0.03) yl = min(y, yp);\n"
-    "    yp = y;\n"
-    "  }\n"
-    "  if (yl < 1e8) up = max(up, (1.0 - smoothstep(0.05, 0.15, p.y - yl)) * (1.0 - smoothstep(0.15, 0.35, abs(yl - w.trail.z))));\n"
+    "  float ylo = sc_flat(w, dt, sv, q, mx, e, down);\n"
+    "  float dh = p.y - ylo;\n"
+    "  up = max(up, smoothstep(-0.06, -0.02, dh) * (1.0 - smoothstep(0.05, 0.15, dh)));\n"
+    // and their caps: the grass fringe along the top edge of a cliff or a wall, just under the flat top behind it
+    // (up the screen), is buried too (0-0.12 under it; the top wide flat again: not a well's rim)
+    "  float dt2 = sc_flat(w, dt, sv, q, mx, e, -down) - p.y;\n"
+    "  up = max(up, smoothstep(-0.04, 0.0, dt2) * (1.0 - smoothstep(0.06, 0.12, dt2)));\n"
+
     "  float3 c = float3(dst.rgb);\n"
     "  float mc = max(c.r, max(c.g, c.b));\n"
+    // near black - the insides of doorways, windows, the gaps under eaves (~0.02 here; ground in a shadow is 0.03 and
+    // up): left exactly as the game drew it
+    "  up *= smoothstep(0.018, 0.03, mc);\n"
     // patchy at first (where the noise is low), then everywhere; thin at first, then thick
     "  float cover = w.flags.z;\n"
     "  float2 pr = float2(p.x * 0.8 + p.z * 0.6, p.z * 0.8 - p.x * 0.6);\n"  // (turned: no grid-aligned patches)
@@ -3261,6 +3284,22 @@ static const char *sc_src =
     "    float hem = above / float(valid);\n"
     "    k *= 1.0 - max(smoothstep(0.45, 0.62, hem) * (1.0 - smoothstep(0.03, 0.05, mc)), smoothstep(0.75, 0.9, rise / float(valid)));\n"
     "  }\n"
+    "  if (k <= 0.0) return dst;\n"
+    // alcoves - a doorstep inside a doorway's arch, lit or not: walls rise close by on the left, the right and behind
+    // (up the screen) all three (ground by a wall or in a corner has two at most). Each side: the highest of a few
+    // samples out to ~90 pixels (at 1080p: a doorway is ~100 wide), the level's model only, ramped over 0.4-0.7 in world height
+    "  float side[3];\n"
+    "  int2 dirs[3] = {int2(-1, 0), int2(1, 0), int2(0, w.flags.x > 0.5 ? 1 : -1)};\n"
+    "  for (int d = 0; d < 3; d++) {\n"
+    "    side[d] = 0.0;\n"
+    "    for (int j = 3; j <= 15; j += 3) {\n"
+    "      int2 qq = clamp(q + dirs[d] * int(rad * float(j)), int2(0), mx);\n"
+    "      float dk = dt.read(uint2(qq));\n"
+    "      if (dk >= 0.99999 || (sv.read(uint2(qq)).r & 0x80u)) continue;\n"
+    "      side[d] = max(side[d], smoothstep(0.4, 0.7, world_at(w, (float2(qq) + 0.5) * e, dk).y - p.y));\n"
+    "    }\n"
+    "  }\n"
+    "  k *= 1.0 - min(side[0], min(side[1], side[2]));\n"
     "  if (k <= 0.0) return dst;\n"
     "  float fp = sc_print(w, tr, p);\n"
     "  if (w.trail.y > 0.5) return half4(mix(dst, half4(1.0, 0.0, 0.0, 1.0), half(k)));\n"
@@ -3432,6 +3471,18 @@ static void snow_cover_check(CmdRec *r, bool indexed, Prog *pr) {
             level = found;
         }
         sc_mark = level ? 1 : 2;
+        // Scenery drawn as actors - bonkable and apple trees, palms, Kiki's tree, props - takes snow like the level:
+        // they are drawn with the level's own fragment shaders (characters, enemies, animals, items never are). Told
+        // by the shaders the level's model has used so far (colour pass: the pre-pass' depth-only shaders say nothing)
+        static uint64_t lvl_fs[64];
+        static int nlvl;
+        if (st.rt.ncolor && g_cur_fs_hash) {
+            int i = 0;
+            while (i < nlvl && lvl_fs[i] != g_cur_fs_hash) i++;
+            if (level && i == nlvl && nlvl < 64) lvl_fs[nlvl++] = g_cur_fs_hash;
+            else if (!level && i < nlvl && st.ubuf[0][4].addr && (st.ubuf[0][4].size == 1056 || st.ubuf[0][4].size == 1072))
+                sc_mark = 1;
+        }
     }
     if (!scene || !level || blended || !st.ds[0]) return;
     sc_color = st.rt.color[0], sc_depth = st.rt.depth, sc_frame = frame;

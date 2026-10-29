@@ -279,7 +279,7 @@ bool weather_snow_cover(SnowFrame *s, const float vp[16]) {
     if (!mat_inverse(s->vp, s->inv_vp)) return false;
     s->flags[2] = g_cover, s->flags[3] = (float)t;
     s->zr[2] = 32, s->zr[3] = 1024;  // (the trail map: 1024 texels over 32 units, ~3 cm each, wrapping)
-    s->trail[0] = env_f("LARECOMP_SNOW_REFILL", 30), s->trail[1] = (float)dbg, s->trail[2] = ground;
+    s->trail[0] = env_f("LARECOMP_SNOW_REFILL", 30), s->trail[1] = (float)dbg;
     // (the scene's colours are linear and before the game's tone mapping: its sunlit white ground is ~1)
     static float tone[4] = {-1};
     if (tone[0] < 0) {
