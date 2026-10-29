@@ -18,6 +18,7 @@
 #include "shader_prep.h"
 #include "recolour.h"
 #include "slowframe.h"
+#include "weather.h"
 
 static id<MTLDevice> dev;
 static id<MTLCommandBuffer> cmdbuf;
@@ -3087,7 +3088,12 @@ static id prep_find_pipe(NSString *body) {
     return p;
 }
 
-static void draw(CmdRec *r, bool indexed) {
+static bool wx_composite, wx_mirror;  // (draw_one: this draw is the scene composite - the weather goes on right after it)
+static NvnTexture *wx_depth;  // the frame's scene depth (the latest scene-camera draw's depth attachment)
+static uint64_t wx_depth_frame = ~0ull;
+static float wx_zn, wx_zf = 1;  // (its depth range: the viewport's)
+static bool wx_dm1;  // (its depth mode: -1..1)
+static void draw_one(CmdRec *r, bool indexed) {
     if (!st.program) { stat_skipped++; return; }
     static bool logged_modes;
     if (!logged_modes) {
@@ -3117,8 +3123,10 @@ static void draw(CmdRec *r, bool indexed) {
             extern void scene_size_log(bool composite, uint32_t sw, uint32_t sh, uint32_t w, uint32_t h);
             if (t0) scene_size_log(composite, t0->width, t0->height, st.rt.color[0]->width, st.rt.color[0]->height);
         }
+        wx_composite = composite;
         if (mirror_draw(composite)) {  // (the vertex flip mirrors a composite drawn with uvs, the fragment one a
             vkey.flip_x = fkey.flip_x = true;  // composite reading pixel positions; get_program keys on vkey)
+            wx_mirror = true;
             pr = get_program(st.program, &vkey, &fkey);
             if (!pr || !pr->ready) { stat_skipped++; return; }
         }
@@ -3153,6 +3161,12 @@ static void draw(CmdRec *r, bool indexed) {
         if (last_hash) widescreen_backdrop_seen(last_hash);
         extern void widescreen_scene_ubo(const float *u, uint64_t size);  // (the camera's view-projection)
         if (st.ubuf[0][5].addr) widescreen_scene_ubo((const float *)(uintptr_t)st.ubuf[0][5].addr, st.ubuf[0][5].size);
+        if (st.ubuf[0][5].addr && st.ubuf[0][5].size == 320) {  // (the weather: the camera, and the depth it draws into)
+            weather_scene_camera((const float *)(uintptr_t)st.ubuf[0][5].addr, st.ubuf[0][5].size, renderer_exec_frame());
+            if (st.rt.depth && st.rt.depth->width >= 640 && renderer_format_is_depth(st.rt.depth->format))
+                wx_depth = st.rt.depth, wx_depth_frame = renderer_exec_frame(), wx_zn = st.depth_range[0][0], wx_zf = st.depth_range[0][1],
+                wx_dm1 = nvn_depth_mode() == 0;
+        }
         if (last_hash == 0x71fe31bbf03c3515ull && getenv("LARECOMP_LOG_INDOOR")) {
             static uint64_t lf;
             extern uint64_t renderer_present_count(void);
@@ -3652,6 +3666,240 @@ static void draw(CmdRec *r, bool indexed) {
             LOG("\n");
         }
     }
+}
+
+// ------------------------------------------------------------------ weather (runtime/nvn/weather.h)
+// Drawn into the window image right after the game's scene composite (before the HUD), at the internal resolution:
+// the upscaler and anything after it treat it as part of the game's picture. One pass of its own on the window image
+// (load / store; the game's next draw opens its pass again): the overcast / lightning fill, the rain streaks or snow
+// flakes (instanced quads; each fragment compared with the scene depth at its pixel: behind it, dropped), the
+// splashes (rings on the ground at hashed screen points, placed in the world by the scene depth there). The scene
+// depth is read as a texture, never bound as an attachment. Shaders kept plain (a GLSL port: the same math).
+static const char *wx_src =
+    "#include <metal_stdlib>\n"
+    "using namespace metal;\n"
+    "struct WF { float4 vp[4]; float4 ivp[4]; float4 origin, box, shape, color, screen, flags, fill, zr; uint count, splashes; int kind; };\n"
+    "struct VO { float4 pos [[position]]; float2 uv; float a; };\n"
+    "static uint pcg(uint v) { uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }\n"
+    "static float h1(uint v) { return float(pcg(v)) * (1.0 / 4294967296.0); }\n"
+    "static float4 clip_of(constant WF &w, float3 p) {\n"  // the game's clip space, then as the game's draws reach Metal
+    "  float4 q = float4(p, 1.0);\n"
+    "  float4 c = float4(dot(w.vp[0], q), dot(w.vp[1], q), dot(w.vp[2], q), dot(w.vp[3], q));\n"
+    "  if (w.flags.x > 0.5) c.y = -c.y;\n"
+    "  if (w.flags.y > 0.5) c.z = (c.z + c.w) * 0.5;\n"
+    "  c.z = w.zr.x * c.w + w.zr.y * c.z;\n"  // (the scene's depth range)
+    "  if (w.flags.z > 0.5) c.x = -c.x;\n"
+    "  return c;\n"
+    "}\n"
+    // rain streaks / snow flakes: instance i at a hashed spot of the volume, which wraps around its centre (so a drop
+    // stays where it is in the world as the camera scrolls), falling with time
+    "vertex VO wx_vs(uint vid [[vertex_id]], uint iid [[instance_id]], constant WF &w [[buffer(0)]],\n"
+    "                depth2d<float> dt [[texture(0)]], device float *probe [[buffer(1)]]) {\n"
+    "  VO o;\n"
+    "  if (iid == 0u && vid == 0u) {\n"  // (the scene depth at the probe points: the ground's height, weather.c)
+    "    const float2 pu[5] = {float2(0.5, 0.5), float2(0.3, 0.35), float2(0.7, 0.35), float2(0.3, 0.65), float2(0.7, 0.65)};\n"
+    "    for (uint k = 0u; k < 5u; k++) probe[k] = dt.read(uint2(pu[k] * (w.screen.zw - 1.0)));\n"
+    "  }\n"
+    "  float S = w.box.x, H = w.box.y, t = w.box.z;\n"
+    "  float3 r = float3(h1(iid * 3u + 1u), h1(iid * 3u + 2u), h1(iid * 3u + 3u));\n"
+    "  float speed = w.shape.z * (0.8 + 0.4 * h1(iid * 7u + 5u));\n"
+    "  float fallen = fmod(r.y * H + t * speed, H);\n"
+    "  float drift = w.box.w / speed * fallen;\n"
+    "  float3 p;\n"
+    "  p.x = w.origin.x + (fract((r.x * S + drift - w.origin.x) / S) - 0.5) * S;\n"
+    "  p.z = w.origin.z + (fract((r.z * S - w.origin.z) / S) - 0.5) * S;\n"
+    "  p.y = w.origin.y + 0.5 * H - fallen;\n"
+    "  float px = w.screen.y / 1080.0;\n"  // (sizes in pixels at 1080p)
+    "  float2 corner = float2((vid & 1u) ? 1.0 : -1.0, (vid & 2u) ? 1.0 : -1.0);\n"
+    "  if (abs(w.flags.w - 2.0) < 0.5) {\n"  // snow: a round flake, nearer ones bigger; a gentle sway
+    "    float ph = r.x * 40.0 + r.z * 17.0;\n"
+    "    p.x += w.shape.w * sin(t * 1.3 + ph);\n"
+    "    p.z += w.shape.w * cos(t * 1.1 + ph * 1.7);\n"
+    "    float4 c = clip_of(w, p);\n"
+    "    float4 ref = clip_of(w, w.origin.xyz);\n"
+    "    float size = w.shape.y * (0.6 + 0.8 * h1(iid * 11u + 3u)) * px * clamp(ref.w / c.w, 0.5, 2.0);\n"
+    "    c.xy += corner * size / w.screen.xy * c.w;\n"
+    "    o.pos = c; o.uv = corner; o.a = w.color.a;\n"
+    "    return o;\n"
+    "  }\n"
+    "  float3 dir = normalize(float3(w.box.w, -speed, 0.0));\n"  // rain: a streak along its fall
+    "  float3 tail = p - dir * w.shape.x * (0.7 + 0.6 * h1(iid * 13u + 7u));\n"
+    "  if (w.flags.w > 2.5) { p.y = w.origin.y - 0.5 * H; tail = p + float3(0.0, 6.0, 0.0); }\n"  // (test: poles)
+    "  float4 ch = clip_of(w, p), ct = clip_of(w, tail);\n"
+    "  float2 sh = ch.xy / ch.w * w.screen.xy, st = ct.xy / ct.w * w.screen.xy;\n"
+    "  float2 d = sh - st;\n"
+    "  d = length(d) > 1e-3 ? normalize(d) : float2(0.0, 1.0);\n"
+    "  float2 n = float2(-d.y, d.x) * w.shape.y * px;\n"
+    "  float4 c = corner.y > 0.0 ? ch : ct;\n"
+    "  c.xy += corner.x * n / w.screen.xy * c.w;\n"
+    "  o.pos = c; o.uv = corner; o.a = corner.y > 0.0 ? w.color.a : 0.0;\n"
+    "  return o;\n"
+    "}\n"
+    "static bool wx_hidden(constant WF &w, depth2d<float> dt, float4 pos) {\n"  // behind the scene at this pixel?
+    "  float2 p = pos.xy;\n"
+    "  if (w.flags.z > 0.5) p.x = w.screen.x - p.x;\n"
+    "  uint2 q = uint2(clamp(p * w.screen.zw / w.screen.xy, float2(0.0), w.screen.zw - 1.0));\n"
+    "  return pos.z > dt.read(q) + 1e-6;\n"
+    "}\n"
+    "fragment float4 wx_fs(VO in [[stage_in]], constant WF &w [[buffer(0)]], depth2d<float> dt [[texture(0)]]) {\n"
+    "  if (wx_hidden(w, dt, in.pos)) discard_fragment();\n"
+    "  float a;\n"
+    "  if (abs(w.flags.w - 2.0) < 0.5) { float r = length(in.uv); a = in.a * (1.0 - smoothstep(0.5, 1.0, r)); }\n"
+    "  else a = in.a * (1.0 - in.uv.x * in.uv.x);\n"
+    "  return float4(w.color.rgb, a);\n"
+    "}\n"
+    // splashes: each slot lives 0.35 s at a time, at a new hashed screen point each time; the scene depth there gives
+    // the world point (ground, roof, water), where a small ring opens on the level plane
+    "vertex VO wx_splash_vs(uint vid [[vertex_id]], uint iid [[instance_id]], constant WF &w [[buffer(0)]],\n"
+    "                       depth2d<float> dt [[texture(0)]]) {\n"
+    "  VO o;\n"
+    "  float life = 0.35, tt = w.box.z / life + h1(iid * 5u + 9u);\n"
+    "  uint cyc = uint(tt);\n"
+    "  float age = fract(tt);\n"
+    "  float2 uv = float2(h1(iid * 131u + cyc * 7919u), h1(iid * 733u + cyc * 104729u + 17u));\n"
+    "  float d = dt.read(uint2(uv * (w.screen.zw - 1.0)));\n"
+    "  o.uv = float2(0.0); o.a = 0.0;\n"
+    "  if (d >= 0.99999) { o.pos = float4(0.0, 0.0, -2.0, 1.0); return o; }\n"  // (sky / nothing there: none)
+    "  float2 m = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);\n"  // (back to the game's clip space)
+    "  if (w.flags.x > 0.5) m.y = -m.y;\n"
+    "  float z = (d - w.zr.x) / w.zr.y;\n"
+    "  if (w.flags.y > 0.5) z = z * 2.0 - 1.0;\n"
+    "  float4 q = float4(m, z, 1.0);\n"
+    "  float4 wp = float4(dot(w.ivp[0], q), dot(w.ivp[1], q), dot(w.ivp[2], q), dot(w.ivp[3], q));\n"
+    "  wp /= wp.w;\n"
+    "  float2 corner = float2((vid & 1u) ? 1.0 : -1.0, (vid & 2u) ? 1.0 : -1.0);\n"
+    "  float rad = w.shape.x * 0.12 * (0.3 + age);\n"
+    "  o.pos = clip_of(w, wp.xyz + float3(corner.x, 0.0, corner.y) * rad);\n"
+    "  o.uv = corner; o.a = w.color.a * 1.4 * (1.0 - age);\n"
+    "  return o;\n"
+    "}\n"
+    "fragment float4 wx_splash_fs(VO in [[stage_in]], constant WF &w [[buffer(0)]]) {\n"
+    "  float r = length(in.uv);\n"
+    "  float ring = smoothstep(0.45, 0.75, r) * (1.0 - smoothstep(0.8, 1.0, r));\n"
+    "  return float4(w.color.rgb, in.a * ring);\n"
+    "}\n"
+    // the fill: out = rgb + picture * a (overcast, lightning)
+    "vertex float4 wx_fill_vs(uint vid [[vertex_id]]) {\n"
+    "  return float4(vid == 1u ? 3.0 : -1.0, vid == 2u ? 3.0 : -1.0, 0.0, 1.0);\n"
+    "}\n"
+    "fragment float4 wx_fill_fs(constant WF &w [[buffer(0)]]) { return w.fill; }\n";
+
+static void weather_encode(void) {
+    static long off = -1;  // (LARECOMP_WEATHER_SKIP=1: the weather computed but not drawn - GPU cost A/B)
+    if (off < 0) off = getenv("LARECOMP_WEATHER_SKIP") ? atol(getenv("LARECOMP_WEATHER_SKIP")) : 0;
+    uint64_t frame = renderer_exec_frame();
+    NvnTexture *win = st.rt.ncolor ? st.rt.color[0] : NULL, *dep = wx_depth;
+    extern bool mirror_scene_size(uint32_t sw, uint32_t sh, uint32_t w, uint32_t h);
+    if (off || !win || !dep || wx_depth_frame != frame || fabsf(wx_zf - wx_zn) < 1e-6f ||
+        !mirror_scene_size(dep->width, dep->height, win->width, win->height))
+        return;
+    float wsx, wsy, dsx, dsy;
+    renderer_texture_scale(win, &wsx, &wsy);
+    renderer_texture_scale(dep, &dsx, &dsy);
+    id<MTLTexture> dt = renderer_texture(dep, nil, true);
+    if (!dt) return;
+    WeatherFrame wf;
+    memset(&wf, 0, sizeof wf);
+    int cw = (int)lroundf(win->width * wsx), ch = (int)lroundf(win->height * wsy);
+    wf.screen[0] = (float)cw, wf.screen[1] = (float)ch;
+    wf.screen[2] = fminf((float)lroundf(dep->width * dsx), (float)dt.width);
+    wf.screen[3] = fminf((float)lroundf(dep->height * dsy), (float)dt.height);
+    wf.flags[0] = nvn_window_origin() == 0, wf.flags[1] = wx_dm1;
+    wf.flags[2] = wx_mirror;  // (the composite was drawn mirrored: mirror_draw)
+    wf.zr[0] = wx_zn, wf.zr[1] = wx_zf - wx_zn;
+    // the scene depth at the probe points, as last frame's particle draw read it (shared memory: a frame late)
+    static id<MTLBuffer> probe;
+    static uint64_t probe_frame;
+    if (!probe) probe = [dev newBufferWithLength:64 options:MTLResourceStorageModeShared];
+    float pd[WEATHER_PROBES];
+    memcpy(pd, probe.contents, sizeof pd);
+    bool have = probe_frame && frame - probe_frame < 4;
+    if (!weather_frame(&wf, frame, have ? pd : NULL)) return;
+    static int dbg = -1;  // LARECOMP_WEATHER_DEBUG (test): 1 opaque red particles, 2 red poles standing on the ground
+    if (dbg < 0) dbg = getenv("LARECOMP_WEATHER_DEBUG") ? atoi(getenv("LARECOMP_WEATHER_DEBUG")) : 0;
+    if (dbg) {
+        wf.color[0] = 1, wf.color[1] = wf.color[2] = 0, wf.color[3] = 1, wf.shape[1] = 4;
+        if (dbg == 2) wf.flags[3] = 3, wf.count = 400, wf.splashes = 0;
+    }
+
+    // pipelines: by the window image's format
+    static id<MTLLibrary> lib;
+    static id<MTLRenderPipelineState> pipe[3];  // particles, splashes, fill
+    static MTLPixelFormat pipe_fmt;
+    id<MTLTexture> ct = view_texture(win, &st.rt.cview[0], st.rt.has_cview[0], true, nil);
+    if (!ct) return;
+    if (!lib) {
+        NSError *err = nil;
+        lib = TIMED_COMPILE([dev newLibraryWithSource:@(wx_src) options:nil error:&err]);
+        if (!lib) { LOG("[weather] shaders: %s\n", err.localizedDescription.UTF8String); off = 1; return; }
+    }
+    if (pipe_fmt != ct.pixelFormat) {
+        pipe_fmt = ct.pixelFormat;
+        static const char *const fn[3][2] = {{"wx_vs", "wx_fs"}, {"wx_splash_vs", "wx_splash_fs"}, {"wx_fill_vs", "wx_fill_fs"}};
+        for (int i = 0; i < 3; i++) {
+            MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
+            pd.vertexFunction = [lib newFunctionWithName:@(fn[i][0])];
+            pd.fragmentFunction = [lib newFunctionWithName:@(fn[i][1])];
+            MTLRenderPipelineColorAttachmentDescriptor *ca = pd.colorAttachments[0];
+            ca.pixelFormat = ct.pixelFormat;
+            ca.blendingEnabled = YES;
+            ca.alphaBlendOperation = ca.rgbBlendOperation = MTLBlendOperationAdd;
+            ca.sourceAlphaBlendFactor = MTLBlendFactorZero, ca.destinationAlphaBlendFactor = MTLBlendFactorOne;  // (alpha kept)
+            ca.sourceRGBBlendFactor = i == 2 ? MTLBlendFactorOne : MTLBlendFactorSourceAlpha;
+            ca.destinationRGBBlendFactor = i == 2 ? MTLBlendFactorSourceAlpha : MTLBlendFactorOneMinusSourceAlpha;
+            NSError *err = nil;
+            pipe[i] = TIMED_COMPILE([dev newRenderPipelineStateWithDescriptor:pd error:&err]);
+            if (!pipe[i]) { LOG("[weather] pipeline %d: %s\n", i, err.localizedDescription.UTF8String); off = 1; return; }
+        }
+    }
+    end_pass();
+    st.rt_dirty = true;  // (the game's next draw opens its pass again)
+    // LARECOMP_WEATHER_TIME=1 (test): the pass in a command buffer of its own, its GPU time logged (mean, every 2 s)
+    static int timing = -1;
+    if (timing < 0) timing = getenv("LARECOMP_WEATHER_TIME") != NULL;
+    if (timing) renderer_submit();
+    MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+    rp.colorAttachments[0].texture = ct;
+    rp.colorAttachments[0].loadAction = MTLLoadActionLoad;
+    rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+    rp.renderTargetWidth = (NSUInteger)(cw < (int)ct.width ? cw : (int)ct.width);
+    rp.renderTargetHeight = (NSUInteger)(ch < (int)ct.height ? ch : (int)ct.height);
+    id<MTLRenderCommandEncoder> e = [cb() renderCommandEncoderWithDescriptor:rp];
+    e.label = @"weather";
+    [e setViewport:(MTLViewport){0, 0, (double)rp.renderTargetWidth, (double)rp.renderTargetHeight, 0, 1}];
+    [e setVertexBytes:&wf length:sizeof wf atIndex:0];
+    [e setFragmentBytes:&wf length:sizeof wf atIndex:0];
+    [e setVertexBuffer:probe offset:0 atIndex:1];
+    [e setVertexTexture:dt atIndex:0];
+    [e setFragmentTexture:dt atIndex:0];
+    if (wf.fill[3] < 1 || wf.fill[0] > 0) {  // (overcast, lightning)
+        [e setRenderPipelineState:pipe[2]];
+        [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    }
+    [e setRenderPipelineState:pipe[0]];
+    [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4 instanceCount:wf.count];
+    probe_frame = frame;
+    if (wf.splashes) {
+        [e setRenderPipelineState:pipe[1]];
+        [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4 instanceCount:wf.splashes];
+    }
+    [e endEncoding];
+    stat_passes++;
+    if (timing) {
+        static double sum;
+        static int n;
+        [cmdbuf addCompletedHandler:^(id<MTLCommandBuffer> c) {
+            sum += c.GPUEndTime - c.GPUStartTime;
+            if (++n == 120) LOG("[weather] pass GPU time %.3f ms (mean of 120)\n", sum / n * 1000), sum = 0, n = 0;
+        }];
+        renderer_submit();
+    }
+}
+
+static void draw(CmdRec *r, bool indexed) {
+    wx_composite = wx_mirror = false;
+    draw_one(r, indexed);
+    if (wx_composite) weather_encode();
 }
 
 // ------------------------------------------------------------------ texture copies

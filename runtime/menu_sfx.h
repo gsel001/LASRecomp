@@ -11,9 +11,11 @@ extern "C" {
 // (in rising importance: a sound drops a less important one started just before it, and is dropped after a more
 // important one - one press, one sound)
 enum { MENU_SFX_CURSOR, MENU_SFX_TAB, MENU_SFX_DECIDE, MENU_SFX_BEEP, MENU_SFX_CANCEL, MENU_SFX_OPEN, MENU_SFX_CLOSE,
+       MENU_SFX_THUNDER,  // (not a menu sound: the Storm weather's thunder, runtime/nvn/weather.c; never drops or is dropped)
        MENU_SFX_N };
 
 void menu_sfx_play(int id);  // any thread
+void menu_sfx_play_gain(int id, float gain);  // (at a volume of its own, 0..1)
 // The start screen's game folder (its romfs/ holds the sounds) until the game's own is set (g_romfs_dir).
 void menu_sfx_set_game_dir(const char *dir);
 // After an ImGui frame of the menu (its thread, before ImGui::Render): the controller's cursor moving plays the cursor

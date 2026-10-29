@@ -547,6 +547,7 @@ static void tab_cosmetics(void) {
         for (CosColour *c : rows) c->pick = COL_DEFAULT;
         g_settings.enemy_colours = 0;
         g_settings.screen_filter = 0;
+        g_settings.weather = 0;
     }
     opt_section("Colors");
     opt_colour("Tunic color", &g_settings.tunic, COL_SLOT_TUNIC,
@@ -594,6 +595,14 @@ static void tab_cosmetics(void) {
     opt_section("Screen");
     opt_choice("Screen filter", &g_settings.screen_filter, g_screen_filters, N_SCREEN_FILTERS, 0,
                "A filter over the whole picture, the HUD included.");
+#ifdef __APPLE__  // (the Metal renderer draws it; Vulkan: not yet - the setting does nothing there)
+    {   // (Off in a seed with its own cosmetics: "Seed", its weather is per seed)
+        const char *names[N_WEATHERS];
+        for (int i = 0; i < N_WEATHERS; i++) names[i] = g_weathers[i];
+        if (cosmetics_seed_on()) names[0] = "Seed";
+        opt_choice("Weather", &g_settings.weather, names, N_WEATHERS, 0, "Rain, snow or a storm on the overworld.");
+    }
+#endif
     opt_end();
 }
 
