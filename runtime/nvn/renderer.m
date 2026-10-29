@@ -3416,12 +3416,14 @@ static void snow_cover_check(CmdRec *r, bool indexed, Prog *pr) {
         st.rt.depth->height == wx_scene_h && st.rt.depth->format == 0x35) {
         // A level draw the pre-pass left out takes no snow: its depth isn't in the scene depth (what shows there has
         // the depth of whatever is behind it) - the floor decals seen through the houses' doorways. Told by the draw's
-        // arguments and vertex buffer: the same in both passes
+        // arguments and vertex buffer: the same in both passes. (The colour pass' marks win where it draws: it writes
+        // the stencil wherever it passes the depth test, so the pre-pass' own guess - its slot 4 is stale - only
+        // stands where nothing else is drawn)
         enum { SIGS = 4096 };
         static uint64_t sig[SIGS], sig_at[SIGS];
         uint64_t h = hmix(hmix(0xcbf29ce484222325ull, r->x, sizeof r->x), &st.vbuf[0].addr, sizeof st.vbuf[0].addr) | 1;
         uint32_t k = (uint32_t)(h ^ h >> 32) & (SIGS - 1);
-        if (level && !st.rt.ncolor) {
+        if (!st.rt.ncolor) {  // (every pre-pass draw: its slot 4 is a leftover - the depth-only shaders don't read it)
             for (int n = 0; n < 16 && sig_at[k] == frame && sig[k] != h; n++) k = (k + 1) & (SIGS - 1);
             sig[k] = h, sig_at[k] = frame;
         } else if (level) {
