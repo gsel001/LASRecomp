@@ -3214,7 +3214,21 @@ static const char *sc_src =
     "  if (dot(n, cq.xyz / cq.w - p) < 0.0) n = -n;\n"  // (facing the camera)
     // how much faces up (soft), less on bumpy models, faded out near depth edges (where the ring is cut)
     "  float rough = saturate((0.9 - flat) / 0.6);\n"
-    "  float up = smoothstep(0.35, 0.85, n.y) * (1.0 - 0.45 * rough) * smoothstep(2.0, 4.5, float(nok));\n"
+    "  float up = smoothstep(0.35, 0.85, n.y) * (1.0 - 0.45 * rough) * mix(0.6, 1.0, smoothstep(2.0, 4.5, float(nok)));\n"
+    // drifts: the foot of anything upright (walls, rocks, tree trunks, the grass fringes along their bases) is
+    // buried - a pixel at most ~0.2 above the flat ground just in front of it takes snow whatever way it faces. The
+    // ground: down the screen from it (4 samples, the level's model only), the first two neighbours at the same
+    // height (a wall's own face drops between samples)
+    "  float yl = 1e9, yp = 1e9;\n"
+    "  int down = int(rad * 1.5) * (w.flags.x > 0.5 ? -1 : 1);\n"  // (the depth's rows run up the screen when flipped)
+    "  for (int j = 1; j <= 4 && yl > 1e8; j++) {\n"
+    "    int2 qq = clamp(q + int2(0, down * j), int2(0), mx);\n"
+    "    float dk = dt.read(uint2(qq));\n"
+    "    float y = dk < 0.99999 && !(sv.read(uint2(qq)).r & 0x80u) ? world_at(w, (float2(qq) + 0.5) * e, dk).y : 1e9;\n"
+    "    if (y < 1e8 && abs(y - yp) < 0.03) yl = min(y, yp);\n"
+    "    yp = y;\n"
+    "  }\n"
+    "  if (yl < 1e8) up = max(up, 1.0 - smoothstep(0.08, 0.2, p.y - yl));\n"
     "  float3 c = float3(dst.rgb);\n"
     "  float mc = max(c.r, max(c.g, c.b));\n"
     // patchy at first (where the noise is low), then everywhere; thin at first, then thick
@@ -3228,17 +3242,21 @@ static const char *sc_src =
     // openings - doorways, windows, holes: none in there. What shows through one is hemmed in: most of a wider ring
     // (~48 pixels: a doorway is ~100 wide, a window ~40) rises well above its surface's plane (ground by a wall has
     // the wall on one side only; ground in front of the opening lies in the plane). Only the level's model counts,
-    // not a character or a fence post standing by (Link in a doorway). Not by its darkness: shadows on the ground
-    // are as dark as a doorway
-    "  int above = 0, valid = 0;\n"
+    // not a character or a fence post standing by (Link in a doorway). Not by its darkness alone: shadows on the
+    // ground are as dark as a doorway
+    "  float above = 0.0;\n"
+    "  int valid = 0;\n"
     "  for (int i = 0; i < 8; i++) {\n"
     "    int2 qq = clamp(q + int2(round(sc_ring[i] * rad * 8.0)), int2(0), mx);\n"
     "    float dk = dt.read(uint2(qq));\n"
     "    if (dk >= 0.99999 || (sv.read(uint2(qq)).r & 0x80u)) continue;\n"
     "    valid++;\n"
-    "    if (dot(world_at(w, (float2(qq) + 0.5) * e, dk) - p, n) > 0.3) above++;\n"
+    "    above += smoothstep(0.2, 0.4, dot(world_at(w, (float2(qq) + 0.5) * e, dk) - p, n));\n"
     "  }\n"
-    "  if (valid >= 3) k *= 1.0 - smoothstep(0.45, 0.62, float(above) / float(valid));\n"
+    "  if (valid >= 3) {\n"  // (lit ground hemmed in by a tree and a rock keeps its snow: only a dark recess, or one
+    "    float hem = above / float(valid);\n"  // closed in nearly all round, is an opening)
+    "    k *= 1.0 - max(smoothstep(0.45, 0.62, hem) * (1.0 - smoothstep(0.03, 0.05, mc)), smoothstep(0.75, 0.9, hem));\n"
+    "  }\n"
     "  if (k <= 0.0) return dst;\n"
     "  float fp = sc_print(w, tr, p);\n"
     "  if (w.trail.y > 0.5) return half4(mix(dst, half4(1.0, 0.0, 0.0, 1.0), half(k)));\n"
