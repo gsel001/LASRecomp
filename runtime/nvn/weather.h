@@ -60,7 +60,8 @@ typedef struct {
     float screen[4];   // the colour target's content size (w, h), the depth's content size (w, h)
     float flags[4];    // x: flip y, y: depth -1..1, z: the cover (0..1), w: the time (s)
     float zr[4];       // the scene depth's range (near, far - near), the trail map's period (world), its size (texels)
-    float trail[4];    // x: how long a print takes to fill in again (s), y: test view (1 the cover's mask in red)
+    float trail[4];    // x: how long a print takes to fill in again (s), y: test view (1 the cover's mask in red),
+                       // z: the ground's height (the weather's probes)
     float tone[4];     // the snow's colour in the scene's (linear, pre-tone-map) units (rgb), w: their reference white
 } SnowFrame;
 // The cover for this frame (false: none - not snowing / nothing settled / not the overworld). vp: the scene pass's

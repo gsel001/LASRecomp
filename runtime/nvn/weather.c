@@ -161,6 +161,7 @@ bool weather_probe_world(const WeatherFrame *f, int i, float d, float out[3]) {
 
 // ---- snow on the ground (weather.h): the cover, Link's footprints and the snow he kicks up
 static double t = 0;   // the weather's time (s): counted only while it shows (weather_frame)
+static float ground;   // the ground's height (weather_frame: the scene depth at its probe points)
 static float g_cover;  // how much snow lies (0..1)
 static float env_f(const char *name, float def) { const char *e = getenv(name); return e ? (float)atof(e) : def; }
 
@@ -278,7 +279,7 @@ bool weather_snow_cover(SnowFrame *s, const float vp[16]) {
     if (!mat_inverse(s->vp, s->inv_vp)) return false;
     s->flags[2] = g_cover, s->flags[3] = (float)t;
     s->zr[2] = 32, s->zr[3] = 1024;  // (the trail map: 1024 texels over 32 units, ~3 cm each, wrapping)
-    s->trail[0] = env_f("LARECOMP_SNOW_REFILL", 30), s->trail[1] = (float)dbg;
+    s->trail[0] = env_f("LARECOMP_SNOW_REFILL", 30), s->trail[1] = (float)dbg, s->trail[2] = ground;
     // (the scene's colours are linear and before the game's tone mapping: its sunlit white ground is ~1)
     static float tone[4] = {-1};
     if (tone[0] < 0) {
@@ -322,7 +323,6 @@ bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PR
     memcpy(f->vp, g_cam + 32, sizeof f->vp);
     if (!mat_inverse(f->vp, f->inv_vp)) return false;
     // the ground's height: the scene depth at a few screen points (probe: the last frame's), their median
-    static float ground = 0;
     static uint64_t ground_frame;
     float ys[WEATHER_PROBES];
     int ny = 0;
