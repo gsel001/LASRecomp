@@ -1,4 +1,4 @@
-// Weather (Cosmetics tab "Weather"): rain, snow or a thunderstorm drawn by the renderer over the game's 3D overworld,
+// Weather (Cosmetics tab "Weather"): rain, snow, a thunderstorm or a blizzard drawn by the renderer over the game's 3D overworld,
 // looks only (no effect on the game, its logic or a seed). The particles live in the world (they stay put as the
 // camera scrolls) and are hidden behind whatever the scene's depth says is in front of them; a rain drop ends in a
 // splash where it meets what the depth says is under it (ground, roof, water), a snow flake settles there and fades. Only on the overworld (level "Field") while it is on screen: not indoors, in dungeons,
@@ -17,7 +17,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-enum { WEATHER_OFF, WEATHER_RAIN, WEATHER_SNOW, WEATHER_STORM, WEATHER_RANDOM };
+enum { WEATHER_OFF, WEATHER_RAIN, WEATHER_SNOW, WEATHER_STORM, WEATHER_BLIZZARD, WEATHER_RANDOM };
 
 typedef struct {
     float vp[16];      // the scene camera's view-projection (rows, the game's GL clip space)
@@ -31,8 +31,9 @@ typedef struct {
     float fill[4];     // full-screen pass: rgb added (lightning), a = what the picture keeps (1 - overcast)
     float zr[4];       // the scene depth's range (the viewport's near, far - near; the renderer fills it)
     float cam[4];      // the camera (world xyz), w: how long a splash plays / a landed flake stays (s)
+    float wind[4];     // the wind: how far it has carried everything so far (world x, z; wrapped), its velocity (x, z)
     uint32_t count, splashes;  // instances
-    int kind;          // WEATHER_RAIN / WEATHER_SNOW / WEATHER_STORM
+    int kind;          // WEATHER_RAIN / WEATHER_SNOW / WEATHER_STORM / WEATHER_BLIZZARD
 } WeatherFrame;
 
 // A scene draw's camera block (vertex constant slot 5, 320 bytes: view, projection, view-projection; perspective only)
@@ -45,7 +46,7 @@ enum { WEATHER_PROBES = 5 };
 extern const float g_weather_probe_uv[WEATHER_PROBES][2];
 bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PROBES]);
 bool weather_probe_world(const WeatherFrame *f, int i, float d, float out[3]);
-// The weather in effect now (WEATHER_OFF/RAIN/SNOW/STORM): the setting, its random roll, or the seed's own
+// The weather in effect now (WEATHER_OFF/RAIN/SNOW/STORM/BLIZZARD): the setting, its random roll, or the seed's own
 int weather_current(void);
 
 // ---- snow on the ground (snow only; prototype). While it snows, surfaces facing up turn white over ~1.5 minutes

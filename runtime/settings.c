@@ -20,8 +20,8 @@ const char *const g_enemy_colour_modes[N_ENEMY_COLOUR_MODES] = {"Off", "Random p
 static const char *const k_enemy_colour_keys[N_ENEMY_COLOUR_MODES] = {"off", "seed", "load"};  // (larecomp.ini)
 const char *const g_screen_filters[N_SCREEN_FILTERS] = {"Off", "Game Boy", "Game Boy Color", "Grayscale"};
 static const char *const k_screen_filter_keys[N_SCREEN_FILTERS] = {"off", "gameboy", "gameboy_color", "grayscale"};  // (else: off)
-const char *const g_weathers[N_WEATHERS] = {"Off", "Rain", "Snow", "Storm", "Random"};
-static const char *const k_weather_keys[N_WEATHERS] = {"off", "rain", "snow", "storm", "random"};  // (else: off)
+const char *const g_weathers[N_WEATHERS] = {"Off", "Rain", "Snow", "Storm", "Blizzard", "Random"};
+static const char *const k_weather_keys[N_WEATHERS] = {"off", "rain", "snow", "storm", "blizzard", "random"};  // (else: off)
 
 Settings g_settings = {
     .aspect = ASPECT_UNLOCKED,

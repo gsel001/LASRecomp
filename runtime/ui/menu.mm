@@ -600,7 +600,7 @@ static void tab_cosmetics(void) {
         const char *names[N_WEATHERS];
         for (int i = 0; i < N_WEATHERS; i++) names[i] = g_weathers[i];
         if (cosmetics_seed_on()) names[0] = "Seed";
-        opt_choice("Weather", &g_settings.weather, names, N_WEATHERS, 0, "Rain, snow or a storm on the overworld.");
+        opt_choice("Weather", &g_settings.weather, names, N_WEATHERS, 0, "Rain, snow, a storm or a blizzard on the overworld.");
     }
 #endif
     opt_end();

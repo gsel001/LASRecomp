@@ -4272,7 +4272,7 @@ static void draw_one(CmdRec *r, bool indexed) {
 static const char *wx_src =
     "#include <metal_stdlib>\n"
     "using namespace metal;\n"
-    "struct WF { float4 vp[4]; float4 ivp[4]; float4 origin, box, shape, color, screen, flags, fill, zr, cam; uint count, splashes; int kind; };\n"
+    "struct WF { float4 vp[4]; float4 ivp[4]; float4 origin, box, shape, color, screen, flags, fill, zr, cam, wind; uint count, splashes; int kind; };\n"
     "struct VO { float4 pos [[position]]; float2 uv; float a; };\n"
     "static uint pcg(uint v) { uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }\n"
     "static float h1(uint v) { return float(pcg(v)) * (1.0 / 4294967296.0); }\n"
@@ -4305,7 +4305,8 @@ static const char *wx_src =
     "  float3 r = float3(h1(iid * 3u + 1u), h1(iid * 3u + 2u), h1(iid * 3u + 3u));\n"
     "  speed = w.shape.z * (0.8 + 0.4 * h1(iid * 7u + 5u));\n"
     "  float3 lo = w.origin.xyz - 0.5 * sz;\n"
-    "  float3 f = fract((r * sz + float3(w.box.w, -speed, 0.0) * tt - lo) / sz);\n"
+    "  float back = w.box.z - tt;\n"  // (the wind's drift then: now's, less its velocity since - gusts change slowly)
+    "  float3 f = fract((r * sz + float3(w.wind.x - w.wind.z * back, -speed * tt, w.wind.y - w.wind.w * back) - lo) / sz);\n"
     "  age = (1.0 - f.y) * sz.y / speed;\n"
     "  float3 p = lo + f * sz;\n"
     "  if (abs(w.flags.w - 2.0) < 0.5) {\n"  // snow: a gentle sway
@@ -4387,10 +4388,22 @@ static const char *wx_src =
     "  float px = w.screen.y / 1080.0;\n"  // (sizes in pixels at 1080p)
     "  float2 corner = float2((vid & 1u) ? 1.0 : -1.0, (vid & 2u) ? 1.0 : -1.0);\n"
     "  if (abs(w.flags.w - 2.0) < 0.5) {\n"  // snow: a round flake, nearer ones bigger
-    "    o.pos = wx_flake(w, iid, p, corner); o.uv = corner; o.a = a;\n"
+    "    float ws = length(w.wind.zw);\n"
+    "    if (ws < 3.0) { o.pos = wx_flake(w, iid, p, corner); o.uv = corner; o.a = a; return o; }\n"
+    // in a strong wind (a blizzard's gusts) a streak along its flight, as wide as the flake
+    "    float4 fc = wx_flake(w, iid, p, float2(1.0, 0.0)), f0 = clip_of(w, p);\n"
+    "    float hw = abs(fc.x / fc.w - f0.x / f0.w) * 0.5 * w.screen.x;\n"  // (the flake's half size in pixels)
+    "    float3 tail = p - float3(w.wind.z, -speed, w.wind.w) * 0.035 * saturate((ws - 3.0) / 5.0);\n"
+    "    float4 ch = clip_of(w, p), ct = clip_of(w, tail);\n"
+    "    float2 d = ch.xy / ch.w * w.screen.xy - ct.xy / ct.w * w.screen.xy;\n"
+    "    d = length(d) > 1e-3 ? normalize(d) : float2(0.0, 1.0);\n"
+    "    float2 n = float2(-d.y, d.x) * hw;\n"
+    "    float4 c = corner.y > 0.0 ? ch : ct;\n"
+    "    c.xy += (corner.x * n + corner.y * d * hw) / w.screen.xy * c.w;\n"
+    "    o.pos = c; o.uv = float2(corner.x, corner.y * 0.6); o.a = a;\n"
     "    return o;\n"
     "  }\n"
-    "  float3 dir = normalize(float3(w.box.w, -speed, 0.0));\n"  // rain: a streak along its fall
+    "  float3 dir = normalize(float3(w.wind.z, -speed, w.wind.w));\n"  // rain: a streak along its fall
     "  float3 tail = p - dir * w.shape.x * (0.7 + 0.6 * h1(iid * 13u + 7u));\n"
     "  if (test) { p.y = w.origin.w; tail = p + float3(0.0, 6.0, 0.0); }\n"
     "  float4 ch = clip_of(w, p), ct = clip_of(w, tail);\n"
@@ -4580,7 +4593,7 @@ static void weather_encode(void) {
         [e setRenderPipelineState:pipe[1]];
         [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4 instanceCount:wf.splashes];
     }
-    if (wf.kind == WEATHER_SNOW && !dbg) {  // (the snow Link kicked up)
+    if ((wf.kind == WEATHER_SNOW || wf.kind == WEATHER_BLIZZARD) && !dbg) {  // (the snow Link kicked up)
         SnowPuff pf[SNOW_PUFFS + 1];
         weather_snow_puffs(pf + 1);
         memset(&pf[0], 0, sizeof pf[0]);

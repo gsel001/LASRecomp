@@ -28,14 +28,14 @@ void weather_scene_camera(const float *u, uint64_t size, uint64_t frame) {
     g_cam_frame = frame;
 }
 
-// LARECOMP_WEATHER=off|rain|snow|storm|random (test): instead of the setting
+// LARECOMP_WEATHER=off|rain|snow|storm|blizzard|random (test): instead of the setting
 static int setting(void) {
     static int env = -2;
     if (env == -2) {
         const char *e = getenv("LARECOMP_WEATHER");
-        static const char *const k[] = {"off", "rain", "snow", "storm", "random"};
+        static const char *const k[] = {"off", "rain", "snow", "storm", "blizzard", "random"};
         env = -1;
-        for (int i = 0; e && i < 5; i++) if (!strcmp(e, k[i])) env = i;
+        for (int i = 0; e && i < 6; i++) if (!strcmp(e, k[i])) env = i;
     }
     return env >= 0 ? env : g_settings.weather;
 }
@@ -46,6 +46,7 @@ static uint32_t mix32(uint32_t h) {
 }
 
 static int g_random = WEATHER_OFF;  // Random: rolled each time the overworld is entered
+static bool snowy(int kind) { return kind == WEATHER_SNOW || kind == WEATHER_BLIZZARD; }
 static bool g_outdoors;
 
 int weather_current(void) {
@@ -191,7 +192,7 @@ void weather_player_tick(uint64_t frame) {
     }
 }
 void weather_player_tick_(uint64_t frame) {
-    if (!g_outdoors || weather_current() != WEATHER_SNOW || !level_is_field()) return;
+    if (!g_outdoors || !snowy(weather_current()) || !level_is_field()) return;
     extern uint64_t doorjump_player(uint64_t frame);  // runtime/hle/doorjump.c (the PlayerCollision component)
     uint64_t pc = doorjump_player(frame);
     if (!pc) return;
@@ -304,6 +305,42 @@ bool weather_snow_cover(SnowFrame *s, const float vp[16]) {
     return true;
 }
 
+// The wind: rain and storm blow steadily along x, snow drifts gently; a blizzard has a light wind of its own and
+// gusts - every 5-12 s it blows hard (7-11 world units / s) from a new direction for 2-5 s, ramped up and back down
+// smoothly. wind[0..1]: the drift so far (wrapped at the volume's size: the particles' positions wrap with it),
+// wind[2..3]: the velocity now. LARECOMP_BLIZZARD_GUST=<s> (test): the first gust then, from LARECOMP_BLIZZARD_DIR
+// (degrees, 0 = screen right, 90 = screen up; every gust)
+static void weather_wind(WeatherFrame *f, int kind, double dt, float size) {
+    static double dx, dz, gust_at = -1, gust_len;
+    static float gust_ang, gust_str, base_ang;
+    float vx, vz;
+    if (kind == WEATHER_BLIZZARD) {
+        if (gust_at < 0) {
+            gust_at = getenv("LARECOMP_BLIZZARD_GUST") ? atof(getenv("LARECOMP_BLIZZARD_GUST")) : t + 3;
+            gust_ang = getenv("LARECOMP_BLIZZARD_DIR") ? (float)atof(getenv("LARECOMP_BLIZZARD_DIR")) * 0.0174533f : frand() * 6.2832f;
+            gust_len = 3, gust_str = 9, base_ang = frand() * 6.2832f;
+        }
+        double a = t - gust_at;
+        if (a > gust_len + 3.5) {  // (the next gust, from somewhere else)
+            gust_at = t + 3 + frand() * 6, gust_len = 2 + frand() * 3, gust_str = 7 + frand() * 4;
+            gust_ang += 1.2f + frand() * 3.9f;  // (at least ~70 degrees off the last)
+            if (getenv("LARECOMP_BLIZZARD_DIR")) gust_ang = (float)atof(getenv("LARECOMP_BLIZZARD_DIR")) * 0.0174533f;
+            a = t - gust_at;
+        }
+        float env = a < 0 ? 0 : a < 1.5 ? (float)(a / 1.5) : a < 1.5 + gust_len ? 1 : (float)fmax(0, 1 - (a - 1.5 - gust_len) / 2);
+        env = env * env * (3 - 2 * env);  // (smooth ramps)
+        base_ang += (float)dt * 0.05f;
+        // screen right = world +x, screen up = world -z (the overworld's camera looks north)
+        vx = 1.2f * cosf(base_ang) + env * gust_str * cosf(gust_ang);
+        vz = -1.2f * sinf(base_ang) - env * gust_str * sinf(gust_ang);
+    } else {
+        vx = kind == WEATHER_SNOW ? 0.6f : kind == WEATHER_STORM ? 8 : 3, vz = 0;
+        gust_at = -1;
+    }
+    dx = fmod(dx + vx * dt, size), dz = fmod(dz + vz * dt, size);
+    f->wind[0] = (float)dx, f->wind[1] = (float)dz, f->wind[2] = vx, f->wind[3] = vz;
+}
+
 bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PROBES]) {
     // host time, counted only while the overworld is on screen (a menu or a door stops it)
     static double last = 0;
@@ -312,9 +349,9 @@ bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PR
     double now = ts.tv_sec + ts.tv_nsec * 1e-9, dt = now - last;
     last = now;
     bool field = level_is_field() && !widescreen_frame_boxed(frame);
-    if (field && !g_outdoors) {  // (back outside: Random rolls again - clear, rain, snow or storm)
+    if (field && !g_outdoors) {  // (back outside: Random rolls again - clear, rain, snow, storm or blizzard)
         g_rng ^= (uint32_t)(now * 1000);
-        g_random = (int)(frand() * 4) % 4;
+        g_random = (int)(frand() * 5) % 5;
         if (setting() == WEATHER_RANDOM) LOG("[weather] random: %d\n", g_random);
     }
     g_outdoors = field;
@@ -322,11 +359,12 @@ bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PR
     if (field && dt > 0 && dt < 0.25) {  // the snow on the ground: builds while it snows, melts otherwise
         static float build = -1;
         if (build < 0) build = env_f("LARECOMP_SNOW_BUILD", 90), g_cover = env_f("LARECOMP_SNOW_COVER", 0);  // (test)
-        g_cover = kind == WEATHER_SNOW ? fminf(1, g_cover + (float)dt / build) : fmaxf(0, g_cover - (float)dt / 30);
+        g_cover = snowy(kind) ? fminf(1, g_cover + (float)dt / (kind == WEATHER_BLIZZARD ? build * 0.45f : build))  // (a blizzard: faster)
+                              : fmaxf(0, g_cover - (float)dt / 30);
     }
     if (!field || kind == WEATHER_OFF || g_cam_frame != frame) return false;
     if (dt > 0 && dt < 0.25) t += dt;
-    if (kind == WEATHER_SNOW) {
+    if (snowy(kind)) {
         static int tm = -1;  // LARECOMP_SNOW_TIME=1 (test): the footprints' and kicked-up snow's CPU time (render thread)
         if (tm < 0) tm = getenv("LARECOMP_SNOW_TIME") != NULL;
         uint64_t t0 = tm ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0;
@@ -378,20 +416,27 @@ bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PR
     // (the overworld camera: ~17.7 above the ground, its view ~24 x 19 of it; the volume from 1.5 under the ground to
     // 8.5 over it, half way to the camera)
     const float size = 34, height = 10, mid = height * 0.5f - 1.5f;
-    bool snow = kind == WEATHER_SNOW, storm = kind == WEATHER_STORM;
+    bool snow = snowy(kind), storm = kind == WEATHER_STORM, bliz = kind == WEATHER_BLIZZARD;
     for (int i = 0; i < 3; i++) f->origin[i] = c[i] + (cp[i] - c[i]) * fminf(mid / cam_h, 0.5f);
     f->origin[3] = ground;
     f->box[0] = size, f->box[1] = height, f->box[2] = (float)fmod(t, 3600.0);
     for (int i = 0; i < 3; i++) f->cam[i] = cp[i];
-    // (fall speeds and the wind fixed too: with the time in them, any change would move every drop)
+    // (fall speeds fixed: with the time in them, any change would move every drop. The wind's drift is integrated
+    // over time instead - weather_wind - so a gust carries the flakes along without moving them back or ahead)
+    weather_wind(f, kind, dt > 0 && dt < 0.25 ? dt : 0, size);
     if (snow) {
-        f->count = 2000;
-        f->shape[0] = 0, f->shape[1] = 9.0f, f->shape[2] = 2.2f, f->shape[3] = 0.5f;
+        f->count = bliz ? 3600 : 2000;
+        f->shape[0] = 0, f->shape[1] = bliz ? 8.0f : 9.0f, f->shape[2] = bliz ? 3.2f : 2.2f, f->shape[3] = bliz ? 0.3f : 0.5f;
         f->box[3] = 0.6f;
         f->splashes = f->count;  // (every flake lies where it landed)
         f->cam[3] = 1.5f;  // (for 1.5 s, fading)
         f->color[0] = 0.97f, f->color[1] = 0.98f, f->color[2] = 1.0f, f->color[3] = 0.9f;
         f->fill[3] = 1;  // (no overcast: snow is bright)
+        if (bliz) {  // (a white haze: the far less clear, more so in a gust)
+            float g = sqrtf(f->wind[2] * f->wind[2] + f->wind[3] * f->wind[3]) / 9;
+            float k = 0.04f + 0.05f * fminf(g, 1);
+            f->fill[0] = 0.92f * k, f->fill[1] = 0.94f * k, f->fill[2] = 0.98f * k, f->fill[3] = 1 - k;
+        }
     } else {
         f->count = storm ? 2000 : 1300;
         f->splashes = f->count / 3;  // (a ring for every third drop)
