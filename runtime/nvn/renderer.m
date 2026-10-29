@@ -3189,20 +3189,26 @@ static const char *sc_src =
     "  }\n"
     "  return yl;\n"
     "}\n"
+    "static float sc_eye(constant SF &w, float2 uv, float d) {\n"  // the eye depth of the scene depth d at uv
+    "  float2 m = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);\n"
+    "  if (w.flags.x > 0.5) m.y = -m.y;\n"
+    "  float z = (d - w.zr.x) / w.zr.y;\n"
+    "  if (w.flags.y > 0.5) z = z * 2.0 - 1.0;\n"
+    "  return 1.0 / dot(w.ivp[3], float4(m, z, 1.0));\n"
+    "}\n"
     "constant float2 sc_hex[6] = {float2(1.0, 0.0), float2(0.5, 0.866), float2(-0.5, 0.866), float2(-1.0, 0.0), float2(-0.5, -0.866), float2(0.5, -0.866)};\n"
     "constant float2 sc_ring[8] = {float2(0.924, 0.383), float2(0.383, 0.924), float2(-0.383, 0.924), float2(-0.924, 0.383),\n"
     "                              float2(-0.924, -0.383), float2(-0.383, -0.924), float2(0.383, -0.924), float2(0.924, -0.383)};\n"
-    "fragment half4 sc_fs(VO in [[stage_in]], constant SF &w [[buffer(0)]], depth2d<float> dt [[texture(0)]],\n"
-    "                     texture2d<float> tr [[texture(1)]], texture2d<uint> sv [[texture(2)]], half4 dst [[color(0)]]) {\n"
-    "  float2 uv = in.pos.xy / w.screen.xy;\n"
+    // the half-resolution pass: per 2x2 pixels, the snow's amount there before footprints (x), its surface's n.y
+    // (y) and bumpiness (z), and its eye depth (w: sc_fs only takes texels at its own depth - edges stay sharp)
+    "fragment float4 sc_half_fs(VO in [[stage_in]], constant SF &w [[buffer(0)]], depth2d<float> dt [[texture(0)]],\n"
+    "                           texture2d<uint> sv [[texture(2)]], texture2d<float> ct [[texture(3)]]) {\n"
     "  int2 mx = int2(w.screen.zw) - 1;\n"
-    "  int2 q = clamp(int2(uv * w.screen.zw), int2(0), mx);\n"
-    "  uint4 sm = sv.read(uint2(q));\n"
-    "  if (abs(w.trail.y - 2.0) < 0.5) return half4((sm.r & 0x80u) ? 1.0h : 0.0h, (sm.r & 1u) ? 1.0h : 0.0h, 0.0h, 1.0h);\n"  // (test)
-    "  if (sm.r & 0x80u) return dst;\n"  // (a character: no snow on it)
-    "  float d = dt.read(uint2(q));\n"
-    "  if (d >= 0.99999) return dst;\n"
+    "  int2 q = clamp(int2(floor(in.pos.xy) * 2.0 * w.screen.zw / w.screen.xy), int2(0), mx);\n"
     "  float2 e = 1.0 / w.screen.zw;\n"
+    "  float d = dt.read(uint2(q));\n"
+    "  float4 none = float4(0.0, 1.0, 0.0, d < 0.99999 ? sc_eye(w, (float2(q) + 0.5) * e, d) : 1e6);\n"
+    "  if (d >= 0.99999 || (sv.read(uint2(q)).r & 0x80u)) return none;\n"
     // the surface's normal over a ring of 6 depth samples ~6 pixels (at 1080p) around it: the cross products of
     // neighbouring samples, summed (a plane fit). Samples across a depth gap (further than 3x the ring's own size at
     // this depth) are left out: no normals across edges, and seams, one-pixel steps and leaves average out - stable
@@ -3228,7 +3234,7 @@ static const char *sc_src =
     "    float3 c = cross(v[i], v[j]);\n"
     "    ns += c; nl += length(c);\n"
     "  }\n"
-    "  if (nok < 2 || nl <= 0.0 || length(ns) < 1e-9) return dst;\n"
+    "  if (nok < 2 || nl <= 0.0 || length(ns) < 1e-9) return none;\n"
     "  float3 n = normalize(ns);\n"
     "  float flat = length(ns) / nl;\n"
     "  float4 cq = float4(w.ivp[0].z * -1.0 + w.ivp[0].w, w.ivp[1].z * -1.0 + w.ivp[1].w, w.ivp[2].z * -1.0 + w.ivp[2].w, w.ivp[3].z * -1.0 + w.ivp[3].w);\n"
@@ -3242,19 +3248,19 @@ static const char *sc_src =
     // a wide flat - not the narrow top of a well's rim, a fence rail or a roof's slats (no drifts on those). Nothing
     // here depends on the weather's probes: the same wherever the view is
     "  int down = int(rad * 1.5) * (w.flags.x > 0.5 ? -1 : 1);\n"  // (the depth's rows run up the screen when flipped)
-    "  float ylo = sc_flat(w, dt, sv, q, mx, e, down);\n"
-    "  float dh = p.y - ylo;\n"
-    "  up = max(up, smoothstep(-0.06, -0.02, dh) * (1.0 - smoothstep(0.05, 0.15, dh)));\n"
+    "  if (up < 0.999) {\n"  // (already all up: nothing to add)
+    "    float dh = p.y - sc_flat(w, dt, sv, q, mx, e, down);\n"
+    "    up = max(up, smoothstep(-0.06, -0.02, dh) * (1.0 - smoothstep(0.05, 0.15, dh)));\n"
+    "  }\n"
     // and their caps: the grass fringe along the top edge of a cliff or a wall, just under the flat top behind it
     // (up the screen), is buried too (0-0.12 under it; the top wide flat again: not a well's rim)
-    "  float dt2 = sc_flat(w, dt, sv, q, mx, e, -down) - p.y;\n"
-    "  up = max(up, smoothstep(-0.04, 0.0, dt2) * (1.0 - smoothstep(0.06, 0.12, dt2)));\n"
+    "  if (up < 0.999) {\n"
+    "    float dt2 = sc_flat(w, dt, sv, q, mx, e, -down) - p.y;\n"
+    "    up = max(up, smoothstep(-0.04, 0.0, dt2) * (1.0 - smoothstep(0.06, 0.12, dt2)));\n"
+    "  }\n"
 
-    "  float3 c = float3(dst.rgb);\n"
+    "  float3 c = ct.read(uint2(clamp(int2(float2(q) * w.screen.xy / w.screen.zw), int2(0), int2(w.screen.xy) - 1))).rgb;\n"
     "  float mc = max(c.r, max(c.g, c.b));\n"
-    // near black - the insides of doorways, windows, the gaps under eaves (~0.02 here; ground in a shadow is 0.03 and
-    // up): left exactly as the game drew it
-    "  up *= smoothstep(0.018, 0.03, mc);\n"
     // patchy at first (where the noise is low), then everywhere; thin at first, then thick
     "  float cover = w.flags.z;\n"
     "  float2 pr = float2(p.x * 0.8 + p.z * 0.6, p.z * 0.8 - p.x * 0.6);\n"  // (turned: no grid-aligned patches)
@@ -3262,7 +3268,7 @@ static const char *sc_src =
     "  float patch = smoothstep(0.0, 1.0, saturate((cover * 1.45 - nz) / 0.25));\n"
     "  float dust = 0.35 * smoothstep(0.0, 0.4, cover) * (0.6 + 0.4 * vnoise(pr * 2.5));\n"  // (a light dusting first)
     "  float k = up * max(patch * (0.45 + 0.55 * smoothstep(0.0, 0.85, cover)), dust);\n"
-    "  if (k <= 0.0) return dst;\n"
+    "  if (k <= 0.0) return none;\n"
     // openings - doorways, windows, holes: none in there. What shows through one is hemmed in: most of a wider ring
     // (~48 pixels: a doorway is ~100 wide, a window ~40) rises above its surface's plane (ground by a wall has the
     // wall on one side only). Only the level's model counts, not a character or a fence post standing by (Link in a
@@ -3284,7 +3290,7 @@ static const char *sc_src =
     "    float hem = above / float(valid);\n"
     "    k *= 1.0 - max(smoothstep(0.45, 0.62, hem) * (1.0 - smoothstep(0.03, 0.05, mc)), smoothstep(0.75, 0.9, rise / float(valid)));\n"
     "  }\n"
-    "  if (k <= 0.0) return dst;\n"
+    "  if (k <= 0.0) return none;\n"
     // alcoves - a doorstep inside a doorway's arch, lit or not: walls rise close by on the left, the right and behind
     // (up the screen) all three (ground by a wall or in a corner has two at most). Each side: the highest of a few
     // samples out to ~90 pixels (at 1080p: a doorway is ~100 wide), the level's model only, ramped over 0.4-0.7 in world height
@@ -3292,7 +3298,7 @@ static const char *sc_src =
     "  int2 dirs[3] = {int2(-1, 0), int2(1, 0), int2(0, w.flags.x > 0.5 ? 1 : -1)};\n"
     "  for (int d = 0; d < 3; d++) {\n"
     "    side[d] = 0.0;\n"
-    "    for (int j = 3; j <= 15; j += 3) {\n"
+    "    for (int j = 3; j <= 15; j += 4) {\n"
     "      int2 qq = clamp(q + dirs[d] * int(rad * float(j)), int2(0), mx);\n"
     "      float dk = dt.read(uint2(qq));\n"
     "      if (dk >= 0.99999 || (sv.read(uint2(qq)).r & 0x80u)) continue;\n"
@@ -3300,14 +3306,57 @@ static const char *sc_src =
     "    }\n"
     "  }\n"
     "  k *= 1.0 - min(side[0], min(side[1], side[2]));\n"
+    "  if (k <= 0.0) return none;\n"
+    "  return float4(k, n.y, rough, sc_eye(w, (float2(q) + 0.5) * e, d));\n"
+    "}\n"
+    // the cover at full resolution: the half-resolution pass' amount from its texels at this pixel's depth (bilinear,
+    // weighed by how alike their depths are: no blur across an edge), then the exact per-pixel parts - characters
+    // left alone, near-black pixels left alone, the footprints, the snow's light
+    "fragment half4 sc_fs(VO in [[stage_in]], constant SF &w [[buffer(0)]], depth2d<float> dt [[texture(0)]],\n"
+    "                     texture2d<float> tr [[texture(1)]], texture2d<uint> sv [[texture(2)]],\n"
+    "                     texture2d<float> hf [[texture(4)]], half4 dst [[color(0)]]) {\n"
+    "  float2 uv = in.pos.xy / w.screen.xy;\n"
+    "  int2 mx = int2(w.screen.zw) - 1;\n"
+    "  int2 q = clamp(int2(uv * w.screen.zw), int2(0), mx);\n"
+    "  uint4 sm = sv.read(uint2(q));\n"
+    "  if (abs(w.trail.y - 2.0) < 0.5) return half4((sm.r & 0x80u) ? 1.0h : 0.0h, (sm.r & 1u) ? 1.0h : 0.0h, 0.0h, 1.0h);\n"  // (test)
+    "  if (sm.r & 0x80u) return dst;\n"  // (a character: no snow on it)
+    "  float d = dt.read(uint2(q));\n"
+    "  if (d >= 0.99999) return dst;\n"
+    "  float3 c = float3(dst.rgb);\n"
+    "  float mc = max(c.r, max(c.g, c.b));\n"
+    // near black - the insides of doorways, windows, the gaps under eaves (~0.02 here; ground in a shadow is 0.03 and
+    // up): left exactly as the game drew it
+    "  if (mc < 0.018) return dst;\n"
+    "  float2 e = 1.0 / w.screen.zw;\n"
+    "  float ez = sc_eye(w, (float2(q) + 0.5) * e, d);\n"
+    "  float2 hp = in.pos.xy * 0.5 - 0.5;\n"
+    "  int2 h0 = int2(floor(hp)), hm = int2(hf.get_width(), hf.get_height()) - 1;\n"
+    "  float2 f = hp - float2(h0);\n"
+    "  float4 acc = float4(0.0);\n"
+    "  float wsum = 0.0, best = 1e9;\n"
+    "  float4 near = float4(0.0, 1.0, 0.0, 0.0);\n"
+    "  for (int i = 0; i < 4; i++) {\n"
+    "    int2 o = int2(i & 1, i >> 1);\n"
+    "    float4 t = hf.read(uint2(clamp(h0 + o, int2(0), hm)));\n"
+    "    float dz = abs(t.w - ez) / ez;\n"
+    "    float wt = (o.x ? f.x : 1.0 - f.x) * (o.y ? f.y : 1.0 - f.y) * (1.0 - smoothstep(0.005, 0.02, dz));\n"
+    "    acc += t * wt, wsum += wt;\n"
+    "    if (dz < best) best = dz, near = t;\n"
+    "  }\n"
+    "  float4 hv = wsum > 1e-4 ? acc / wsum : near;\n"
+    "  float k = hv.x * smoothstep(0.018, 0.03, mc);\n"
     "  if (k <= 0.0) return dst;\n"
+    "  float cover = w.flags.z, rough = hv.z;\n"
+    "  float3 p = world_at(w, (float2(q) + 0.5) * e, d);\n"
+    "  float2 pr = float2(p.x * 0.8 + p.z * 0.6, p.z * 0.8 - p.x * 0.6);\n"
     "  float fp = sc_print(w, tr, p);\n"
     "  if (w.trail.y > 0.5) return half4(mix(dst, half4(1.0, 0.0, 0.0, 1.0), half(k)));\n"
     "  k *= 1.0 - saturate(fp) * (0.9 - 0.45 * cover);\n"  // (a dent in deep snow, the ground through a thin layer)
     // the snow's light: the picture's own (its shadows stay; evened out on bumpy models, whose pixels flicker
     // between leaf and gap), the slope, a soft unevenness
     "  float lit = mix(saturate(mc / w.tone.w), 0.8, rough * 0.7);\n"
-    "  float3 col = w.tone.rgb * (0.45 + 0.55 * lit) * (0.85 + 0.15 * n.y) * (0.96 + 0.06 * vnoise(pr * 3.0));\n"
+    "  float3 col = w.tone.rgb * (0.45 + 0.55 * lit) * (0.85 + 0.15 * hv.y) * (0.96 + 0.06 * vnoise(pr * 3.0));\n"
     "  col *= float3(1.0 - 0.5 * saturate(fp), 1.0 - 0.42 * saturate(fp), 1.0 - 0.28 * saturate(fp));\n"  // (its shade: blue-grey)
     "  return half4(half3(mix(c, col, k)), dst.a);\n"
     "}\n";
@@ -3369,6 +3418,16 @@ static void snow_cover_encode(void) {
         trail = [dev newTextureWithDescriptor:td];
         if (!stamp || !trail) { LOG("[snow] trail map: %s\n", err.localizedDescription.UTF8String); off = 1; return; }
     }
+    static id<MTLRenderPipelineState> half_pipe;
+    if (!half_pipe) {
+        MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
+        pd.vertexFunction = [lib newFunctionWithName:@"sc_vs"];
+        pd.fragmentFunction = [lib newFunctionWithName:@"sc_half_fs"];
+        pd.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
+        NSError *err = nil;
+        half_pipe = TIMED_COMPILE([dev newRenderPipelineStateWithDescriptor:pd error:&err]);
+        if (!half_pipe) { LOG("[snow] half pipeline: %s\n", err.localizedDescription.UTF8String); off = 1; return; }
+    }
     if (cover_fmt != ct.pixelFormat) {
         cover_fmt = ct.pixelFormat;
         MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
@@ -3404,11 +3463,70 @@ static void snow_cover_encode(void) {
         [e endEncoding];
         stat_passes++;
     }
+    // LARECOMP_SNOW_TIME=1 (test): the cover's GPU time (its two passes) from timestamps at their fragment stages' start and end (in place: the
+    // frame's command buffer as always), and the CPU time of the snow's hooks, logged as means every 120 frames
+    static int timing = -1;
+    static id<MTLCounterSampleBuffer> tsb;
+    if (timing < 0) {
+        timing = getenv("LARECOMP_SNOW_TIME") != NULL;
+        if (timing) {
+            id<MTLCounterSet> ts = nil;
+            for (id<MTLCounterSet> c in dev.counterSets) if ([c.name isEqualToString:MTLCommonCounterSetTimestamp]) ts = c;
+            MTLCounterSampleBufferDescriptor *d = [MTLCounterSampleBufferDescriptor new];
+            d.counterSet = ts, d.storageMode = MTLStorageModeShared, d.sampleCount = 2 * 64;
+            NSError *err = nil;
+            tsb = ts && [dev supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary] ? [dev newCounterSampleBufferWithDescriptor:d error:&err] : nil;
+            LOG("[snow] timing: GPU timestamps %s\n", tsb ? "on" : "not available");
+        }
+    }
+    static uint32_t ts_slot;
+    uint32_t slot = ts_slot++ % 64;
+    // the half-resolution analysis (sc_half_fs) into a small texture of its own
+    int hw = (cw + 1) / 2, hh = (ch + 1) / 2;
+    static id<MTLTexture> half;
+    if (!half || (int)half.width < hw || (int)half.height < hh) {
+        MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
+                                                                                      width:(NSUInteger)hw height:(NSUInteger)hh mipmapped:NO];
+        td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+        td.storageMode = MTLStorageModePrivate;
+        half = [dev newTextureWithDescriptor:td];
+        if (!half) { off = 1; return; }
+    }
+    {
+        MTLRenderPassDescriptor *hp = [MTLRenderPassDescriptor renderPassDescriptor];
+        hp.colorAttachments[0].texture = half;
+        hp.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+        hp.colorAttachments[0].storeAction = MTLStoreActionStore;
+        hp.renderTargetWidth = (NSUInteger)hw, hp.renderTargetHeight = (NSUInteger)hh;
+        if (tsb) {
+            MTLRenderPassSampleBufferAttachmentDescriptor *sa = hp.sampleBufferAttachments[0];
+            sa.sampleBuffer = tsb;
+            sa.startOfVertexSampleIndex = sa.endOfVertexSampleIndex = sa.endOfFragmentSampleIndex = MTLCounterDontSample;
+            sa.startOfFragmentSampleIndex = slot * 2;
+        }
+        id<MTLRenderCommandEncoder> e = [cb() renderCommandEncoderWithDescriptor:hp];
+        e.label = @"snow cover (half)";
+        [e setViewport:(MTLViewport){0, 0, (double)hw, (double)hh, 0, 1}];
+        [e setRenderPipelineState:half_pipe];
+        [e setFragmentBytes:&sf length:sizeof sf atIndex:0];
+        [e setFragmentTexture:dt atIndex:0];
+        [e setFragmentTexture:sv atIndex:2];
+        [e setFragmentTexture:ct atIndex:3];
+        [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+        [e endEncoding];
+        stat_passes++;
+    }
     MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
     rp.colorAttachments[0].texture = ct;
     rp.colorAttachments[0].loadAction = MTLLoadActionLoad;
     rp.colorAttachments[0].storeAction = MTLStoreActionStore;
     rp.renderTargetWidth = (NSUInteger)cw, rp.renderTargetHeight = (NSUInteger)ch;
+    if (tsb) {  // (the end of the cover's fragments; the half pass' start: below)
+        MTLRenderPassSampleBufferAttachmentDescriptor *sa = rp.sampleBufferAttachments[0];
+        sa.sampleBuffer = tsb;
+        sa.startOfVertexSampleIndex = sa.endOfVertexSampleIndex = sa.startOfFragmentSampleIndex = MTLCounterDontSample;
+        sa.endOfFragmentSampleIndex = slot * 2 + 1;
+    }
     id<MTLRenderCommandEncoder> e = [cb() renderCommandEncoderWithDescriptor:rp];
     e.label = @"snow cover";
     [e setViewport:(MTLViewport){0, 0, (double)cw, (double)ch, 0, 1}];
@@ -3417,10 +3535,31 @@ static void snow_cover_encode(void) {
     [e setFragmentTexture:dt atIndex:0];
     [e setFragmentTexture:trail atIndex:1];
     [e setFragmentTexture:sv atIndex:2];
+    [e setFragmentTexture:half atIndex:4];
     [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [e endEncoding];
     stat_passes++;
     snapshots_invalidate(sc_color);
+    if (tsb) {
+        static double sum;
+        static int n;
+        static uint64_t cpu0, gpu0;
+        if (!cpu0) [dev sampleTimestamps:&cpu0 gpuTimestamp:&gpu0];
+        id<MTLCounterSampleBuffer> b = tsb;
+        [cmdbuf addCompletedHandler:^(id<MTLCommandBuffer> c) {
+            (void)c;
+            NSData *d = [b resolveCounterRange:NSMakeRange(slot * 2, 2)];
+            if (!d || d.length < 16) return;
+            const uint64_t *t = d.bytes;
+            if (t[1] <= t[0] || t[0] == MTLCounterErrorValue) return;
+            uint64_t c1, g1;
+            [dev sampleTimestamps:&c1 gpuTimestamp:&g1];
+            // (GPU ticks -> ns: against the CPU's timestamps - ns - over the run so far; 1 on Apple GPUs)
+            double per = g1 > gpu0 ? (double)(c1 - cpu0) / (double)(g1 - gpu0) : 1.0;
+            sum += (double)(t[1] - t[0]) * per;
+            if (++n == 120) LOG("[snow] cover pass GPU %.3f ms (mean of 120)\n", sum / n / 1e6), sum = 0, n = 0;
+        }];
+    }
 }
 
 // Before each draw: while there is snow, the scene's opaque draws (depth pre-pass and colour pass) write stencil bit 7
@@ -3443,11 +3582,22 @@ static void snow_cover_check(CmdRec *r, bool indexed, Prog *pr) {
     if (!weather_snow_on()) return;
     uint64_t s4 = st.ubuf[0][4].addr ? st.ubuf[0][4].size : 0, inst = indexed ? r->x[6] : r->x[4];
     bool level = (s4 == 912 || s4 == 928) && inst <= 1 && st.ubuf[0][1].addr && st.ubuf[0][1].size == 1024;
-    if (level && st.rt.ncolor) {  // (the water is part of the level's model: told by its maps, recolour_water.c)
-        extern int renderer_texpatch_of(NvnTexture *t);
-        for (int i = 0; i < pr->fi->ntex && level; i++) {
-            NvnTexture *t = shader_texture_object(1, &pr->fi->tex[i]);
-            if (t && recolour_class_of(renderer_texpatch_of(t)) == 32) level = false;
+    if (level && st.rt.ncolor) {  // (the water is part of the level's model: told by its maps, recolour_water.c -
+        // looked up once per program and mesh, then remembered: a mesh keeps its maps)
+        enum { WC = 1024 };
+        static struct { uint64_t key; bool water; } wc[WC];
+        uint64_t key = ((uint64_t)(uintptr_t)pr * 0x9E3779B97F4A7C15ull ^ st.vbuf[0].addr) | 1;
+        uint32_t k = (uint32_t)(key ^ key >> 29) & (WC - 1);
+        if (wc[k].key == key) level = !wc[k].water;
+        else {
+            extern int renderer_texpatch_of(NvnTexture *t);
+            bool water = false;
+            for (int i = 0; i < pr->fi->ntex && !water; i++) {
+                NvnTexture *t = shader_texture_object(1, &pr->fi->tex[i]);
+                if (t && recolour_class_of(renderer_texpatch_of(t)) == 32) water = true;
+            }
+            wc[k].key = key, wc[k].water = water;
+            level = !water;
         }
     }
     // the depth pre-pass and the colour pass' opaque draws (Link and the water are only in that one)
@@ -3460,7 +3610,9 @@ static void snow_cover_check(CmdRec *r, bool indexed, Prog *pr) {
         // stands where nothing else is drawn)
         enum { SIGS = 4096 };
         static uint64_t sig[SIGS], sig_at[SIGS];
-        uint64_t h = hmix(hmix(0xcbf29ce484222325ull, r->x, sizeof r->x), &st.vbuf[0].addr, sizeof st.vbuf[0].addr) | 1;
+        uint64_t h = st.vbuf[0].addr * 0x9E3779B97F4A7C15ull;
+        for (int i = 0; i < 7; i++) h = (h ^ r->x[i]) * 0xBF58476D1CE4E5B9ull, h ^= h >> 31;
+        h |= 1;
         uint32_t k = (uint32_t)(h ^ h >> 32) & (SIGS - 1);
         if (!st.rt.ncolor) {  // (every pre-pass draw: its slot 4 is a leftover - the depth-only shaders don't read it)
             for (int n = 0; n < 16 && sig_at[k] == frame && sig[k] != h; n++) k = (k + 1) & (SIGS - 1);
@@ -3488,6 +3640,32 @@ static void snow_cover_check(CmdRec *r, bool indexed, Prog *pr) {
     sc_color = st.rt.color[0], sc_depth = st.rt.depth, sc_frame = frame;
     memcpy(sc_vp, (const float *)(uintptr_t)st.ubuf[0][1].addr, sizeof sc_vp);
     sc_zn = st.depth_range[0][0], sc_zf = st.depth_range[0][1], sc_dm1 = nvn_depth_mode() == 0;
+}
+
+// LARECOMP_SNOW_TIME=1 (test): snow_cover_check's CPU time (render thread: its marks, the cover's encoding), the
+// mean per frame logged every 120 frames
+static void snow_cover_check_timed(CmdRec *r, bool indexed, Prog *pr) {
+    static int tm = -1;
+    if (tm < 0) tm = getenv("LARECOMP_SNOW_TIME") != NULL;
+    if (!tm) { snow_cover_check(r, indexed, pr); return; }
+    static uint64_t last = ~0ull, sum, ndraws;
+    static int n;
+    uint64_t f = renderer_exec_frame();
+    if (f != last) {
+        if (last != ~0ull && weather_snow_on() && ++n == 120)
+            LOG("[snow] render thread CPU %.1f us a frame (%llu draws checked a frame)\n", sum / 120 / 1e3, (unsigned long long)(ndraws / 120)), sum = ndraws = 0, n = 0;
+        last = f;
+    }
+    uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW), done = sc_done;
+    snow_cover_check(r, indexed, pr);
+    uint64_t dtn = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0;
+    sum += dtn, ndraws++;
+    if (sc_done != done) {  // (this call encoded the cover)
+        static uint64_t esum;
+        static int en;
+        esum += dtn;
+        if (++en == 120) LOG("[snow] encoding the cover %.1f us a frame\n", esum / 120 / 1e3), esum = 0, en = 0;
+    }
 }
 
 static void draw_one(CmdRec *r, bool indexed) {
@@ -3591,7 +3769,7 @@ static void draw_one(CmdRec *r, bool indexed) {
     if (td_pending) { td_flush_shader_textures(0, pr->vi); td_flush_shader_textures(1, pr->fi); }
     resolve_feedback(pr);
     // this draw's writes make snapshots of its attachments stale
-    snow_cover_check(r, indexed, pr);  // (the snow on the ground: its stencil marks, the cover after the opaque draws)
+    snow_cover_check_timed(r, indexed, pr);  // (the snow on the ground: its stencil marks, the cover after the opaque draws)
     snap_reason = "draw-depthwrite";
     if (st.rt.depth && st.ds[0] && st.ds[1]) snapshots_invalidate(st.rt.depth);  // stencil-only writes: shaders sample depth
     snap_reason = "draw-colorwrite";

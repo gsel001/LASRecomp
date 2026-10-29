@@ -178,6 +178,19 @@ static double host_now(void) {
 
 static bool level_is_field(void);
 void weather_player_tick(uint64_t frame) {
+    static int tm = -1;  // LARECOMP_SNOW_TIME=1 (test): this tick's CPU time (game thread), mean every 120 frames
+    if (tm < 0) tm = getenv("LARECOMP_SNOW_TIME") != NULL;
+    uint64_t t0 = tm ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0;
+    void weather_player_tick_(uint64_t frame);
+    weather_player_tick_(frame);
+    if (tm) {
+        static uint64_t sum;
+        static int n;
+        sum += clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0;
+        if (++n == 120) LOG("[snow] game thread CPU %.2f us a frame\n", sum / 120 / 1e3), sum = 0, n = 0;
+    }
+}
+void weather_player_tick_(uint64_t frame) {
     if (!g_outdoors || weather_current() != WEATHER_SNOW || !level_is_field()) return;
     extern uint64_t doorjump_player(uint64_t frame);  // runtime/hle/doorjump.c (the PlayerCollision component)
     uint64_t pc = doorjump_player(frame);
@@ -313,7 +326,18 @@ bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PR
     }
     if (!field || kind == WEATHER_OFF || g_cam_frame != frame) return false;
     if (dt > 0 && dt < 0.25) t += dt;
-    if (kind == WEATHER_SNOW) snow_link();
+    if (kind == WEATHER_SNOW) {
+        static int tm = -1;  // LARECOMP_SNOW_TIME=1 (test): the footprints' and kicked-up snow's CPU time (render thread)
+        if (tm < 0) tm = getenv("LARECOMP_SNOW_TIME") != NULL;
+        uint64_t t0 = tm ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0;
+        snow_link();
+        if (tm) {
+            static uint64_t sum;
+            static int n;
+            sum += clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0;
+            if (++n == 120) LOG("[snow] footprints CPU %.2f us a frame\n", sum / 120 / 1e3), sum = 0, n = 0;
+        }
+    }
 
     // (screen, flags, zr: filled by the renderer)
     memset(f->origin, 0, sizeof f->origin), memset(f->box, 0, sizeof f->box), memset(f->shape, 0, sizeof f->shape);
