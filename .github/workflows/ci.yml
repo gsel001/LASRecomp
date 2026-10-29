@@ -108,6 +108,8 @@ jobs:
         run: python3 tools/test_game_addresses.py
       - name: Randomizer Field region table
         run: python3 tools/test_field_regions.py
+      - name: Randomizer room shuffle ledges
+        run: python3 tools/test_room_ledges.py
       - name: Vulkan synchronization failure regression
         run: python3 tools/test_vulkan_sync_errors.py
       - name: Shader translator instruction semantics

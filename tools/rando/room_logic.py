@@ -7,7 +7,8 @@ that no longer holds, so for every shuffled dungeon this module builds the logic
 
   graph      cells of the layout; edges = doorways that connect (neighbours whose doorways line up, door jumps -
              directed), plus the stairs links (side-view passages; stairs rooms are
-             anchors and never move)
+             anchors and never move); drop-down-only doorways (a ledge Link can't climb from his
+             room: dungeon_gen.inward_only) lead in only
   doors      only a room's OWN door actors count (a "(mirror)" door stood in the old neighbour, which isn't there):
              lock -> the dungeon's small keys, boss door -> its Nightmare Key, cracked wall -> bombs, shutter ->
              something to fight with / hit switches (approximate), pot in the doorway -> break-pot, water in the
@@ -497,8 +498,9 @@ def rooms_neighbour(room, side):
     return rooms.neighbour(room, side)
 
 
-def level_graph(cat, romfs, level, layout, jump_rows, openings):
-    """{cell: [(cell, frozenset req)]} directed edges; lock count."""
+def level_graph(cat, romfs, level, layout, jump_rows, openings, trace=None):
+    """{cell: [(cell, frozenset req)]} directed edges; lock count. trace: a list getting (cell, side, slot, target)
+    for every edge through a doorway (inward_exits)."""
     n = LEVELS[level][0]
     pos = {cell_pos(c, level): c for c in layout}
     edges = {c: [] for c in layout}
@@ -510,6 +512,11 @@ def level_graph(cat, romfs, level, layout, jump_rows, openings):
     for room in set(layout.values()):
         flags.update(('block', b) for b in lock_blocks(romfs, room))
     locks = len(flags)
+    import dungeon_gen
+    # drop-down-only doorways (dungeon_gen.inward_only): Link comes in through them, never leaves by them - no edge
+    # out (a ledge holding stairs: out from the rooms the stairs come from, see below)
+    inward = dungeon_gen.inward_only(romfs) if romfs else {}
+    via_stairs = []  # (cell, target, req): leaving through such a doorway after arriving by the stairs on its ledge
     jumped = set()
     for row in jump_rows:
         if row[0] != level:
@@ -519,11 +526,16 @@ def level_graph(cat, romfs, level, layout, jump_rows, openings):
         jumped.add((cell, side, own))
         if target not in layout:
             continue
+        kind = inward.get((layout[cell], side, own))
         req = door_terms(own_doors(cat, layout[cell], side, own), n, room_types=cat[layout[cell]].get('types', ()),
                          lock_id=lock_flag(romfs, layout[cell], side) or f'{cell}{side}{own}',
                          shutter=shutter_req(romfs, layout[cell], side))
-        if req is not None:
+        if req is not None and kind == 'arrival':
+            via_stairs.append((cell, target, req))
+        elif req is not None and not kind:
             edges[cell].append((target, req))
+            if trace is not None:
+                trace.append((cell, side, own, target))
     for cell, room in layout.items():
         op = openings(cat, room)
         c, r = cell_pos(cell, level)
@@ -551,13 +563,19 @@ def level_graph(cat, romfs, level, layout, jump_rows, openings):
                                     shutter=shutter_req(romfs, layout[nb], OPP[side]))
                 if req_out is None or req_in is None:
                     continue
-                edges[cell].append((nb, req_out | req_in))
+                kind = inward.get((room, side, slot))
+                if kind == 'arrival':
+                    via_stairs.append((cell, nb, req_out | req_in))
+                elif not kind:
+                    edges[cell].append((nb, req_out | req_in))
+                    if trace is not None:
+                        trace.append((cell, side, slot, nb))
     for cell, room in layout.items():  # leaving a room with keyhole blocks: they may guard the way (see lock_blocks)
         bl = frozenset(f'LOCK|{n}|block{b}' for b in lock_blocks(romfs, room))
         if bl:
             edges[cell] = [(t, r | bl) for t, r in edges[cell]]
-    import dungeon_gen
     where = {room: cell for cell, room in layout.items()}  # (LINK_LEVELS: stairs / hole rooms may have moved)
+    stairs_from = {}  # cell -> cells whose stairs arrive in it
     for a, b in stairs_links(romfs, level, cat):
         ca, cb = a.rsplit('_', 1)[1], b.rsplit('_', 1)[1]
         if level in dungeon_gen.LINK_LEVELS:
@@ -567,9 +585,16 @@ def level_graph(cat, romfs, level, layout, jump_rows, openings):
             if ca and cb:
                 edges[ca].append((cb, req))
                 edges[cb].append((ca, req))
+                stairs_from.setdefault(ca, []).append((cb, req))
+                stairs_from.setdefault(cb, []).append((ca, req))
         elif layout.get(ca) == a and layout.get(cb) == b:  # (stairs rooms stay home)
             edges[ca].append((cb, frozenset()))
             edges[cb].append((ca, frozenset()))
+            stairs_from.setdefault(ca, []).append((cb, frozenset()))
+            stairs_from.setdefault(cb, []).append((ca, frozenset()))
+    for cell, target, req in via_stairs:  # (Turtle Rock 06E's south strip: its upstairs arrive on it)
+        for src, sreq in stairs_from.get(cell, ()):
+            edges[src].append((target, req | sreq))
     if level in dungeon_gen.LINK_LEVELS:  # holes: one way down, into the room holding the landing spot
         for a, b in hole_links(romfs, level, cat):
             if where.get(a) and where.get(b):
@@ -579,6 +604,18 @@ def level_graph(cat, romfs, level, layout, jump_rows, openings):
             edges[cell] = [(t, r if EXIT_REQ.get(layout.get(t)) == EXIT_REQ[room] else r | EXIT_REQ[room])
                            for t, r in edges[cell]]
     return edges, locks
+
+
+def inward_exits(cat, romfs, level, layout, jump_rows):
+    """[(cell, side, slot, target)]: logic edges that leave a cell through a drop-down-only doorway
+    (dungeon_gen.inward_only) - must be none (seed_sweep.py checks every room-shuffled seed). layout: dungeon_gen's
+    ({'Lv.._08D': room}) or cells ('08D')."""
+    import dungeon_gen
+    L = {c.rsplit('_', 1)[-1]: r for c, r in layout.items()}
+    trace = []
+    level_graph(cat, romfs, level, L, jump_rows, dungeon_gen.openings, trace)
+    inward = dungeon_gen.inward_only(romfs)
+    return [t for t in trace if (L[t[0]], t[1], t[2]) in inward]
 
 
 def key_counts(edges, start):

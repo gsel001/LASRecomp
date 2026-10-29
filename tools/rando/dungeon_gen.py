@@ -1096,6 +1096,148 @@ def landing_depth(romfs, room, side, slot, min_tile):
     return 2.2, 0.0, 0.0
 
 
+# ---- Drop-down-only doorways (user's beta_6 photo, seed LuckyMoblin988: Turtle Rock 07E's pot room in Tail Cave 07C).
+# A raised doorway whose tiles sit on a ledge walled off from the rest of its room: Link comes in through it (a door
+# jump lands him past the ledge, landing_depth; in vanilla he drops off it), never leaves by it - the ledge can't be
+# climbed from the room's floor. room_logic.level_graph makes them one-way (in only), so the item logic and the
+# generator's own checks (boss_door_ok, fill_ok) never count on leaving through one; checks behind one with no other
+# way in drop out of logic (excluded, like rooms the layout leaves unreachable). inward_only finds them in the tile
+# grids; the reviewed result (grids read by hand 2026-10-28) is INWARD_REVIEWED, guarded by tools/test_room_ledges.py:
+#   Turtle Rock 07E N16  1.5 notch, ledge row 1 above the 0.0 floor - the photo (vanilla: dropped into from 06E)
+#   Turtle Rock 05B N3   1.5 strip (row 1) behind ledge row 2 (vanilla: dropped into from 04B)
+#   Turtle Rock 03C W3   1.5 strip (row 1, cols 0-2) behind ledge row 2 (vanilla: from 03B's ramp)
+#   Turtle Rock 03G W3   1.5 notch, ledge column 1, pits below (PLAN 2026-10-09: Link fell walking into it)
+#   Turtle Rock 03E E3   1.5 notch behind a ledge tile (03E stays home: STAY)
+#   Turtle Rock 04E W3   1.5 notch (row 1, cols 0-1) walled by ledge tiles
+#   Turtle Rock 02E S7   1.5 notch (col 3, rows 6-7) walled by ledge tiles (from 03E's ramp: the northern-ledge strip)
+#   Face Shrine 04H S17  1.5 notch behind a 3.0 wall (vanilla: the end of 05H's ramp)
+#   Face Shrine 07G S17  the wizzrobes-ledge strip (TIED to 08G, LEDGE_VIA: reached from 08G's ramp only)
+#   Key Cavern 01D S17   1.5 notch behind a ledge; its vanilla partner 02D N17 is walled off too (a dead pair)
+#   Key Cavern 02D N17   1.5 notch walled off from 02D's east strip
+#   Turtle Rock 06E S16  'arrival': 06E's upstairs come out on its south strip (its ramp only leads into the pits) -
+#                        left from the rooms the stairs come from, never from 06E's floor
+# Not ledges: doorway tiles at 2.0 / 3.0 with open floor right behind them are door frames (Color Dungeon, Angler's
+# Tunnel); a raised strip with a ramp down to its room's floor (Key Cavern 01A, Face Shrine 03B-04D walkways) or on
+# to another doorway is walkable; sides between cells of one unit (Turtle Rock 06F S / 07F N) never jump.
+INWARD_REVIEWED = {
+    ('Lv08TurtleRock_07E', 'N', 16): 'ledge', ('Lv08TurtleRock_05B', 'N', 3): 'ledge',
+    ('Lv08TurtleRock_03C', 'W', 3): 'ledge', ('Lv08TurtleRock_03G', 'W', 3): 'ledge',
+    ('Lv08TurtleRock_03E', 'E', 3): 'ledge', ('Lv08TurtleRock_04E', 'W', 3): 'ledge',
+    ('Lv08TurtleRock_02E', 'S', 7): 'ledge', ('Lv06FaceShrine_04H', 'S', 17): 'ledge',
+    ('Lv06FaceShrine_07G', 'S', 17): 'ledge', ('Lv03KeyCavern_01D', 'S', 17): 'ledge',
+    ('Lv03KeyCavern_02D', 'N', 17): 'ledge', ('Lv08TurtleRock_06E', 'S', 16): 'arrival'}
+INWARD_ARRIVALS = ('AreaUpstairs', 'AreaDownstairs', 'TagPlayerStart', 'ObjDungeonWarp')
+
+
+@functools.lru_cache(maxsize=None)
+def _inward_only(romfs, catalog_path):
+    from RandomizerCore.Tools import leb
+    cat = json.load(open(catalog_path))
+    grids, arrivals = {}, {}
+
+    def grid(room):
+        if room not in grids:
+            r = leb.Room(open(rooms._leb_path(romfs, room), 'rb').read())
+            raw = rooms._grid(r)[b'data'].data
+            g = {}
+            for row in range(8):
+                for col in range(10):
+                    o = 0x10 * (row * 10 + col)
+                    t, h = raw[o:o + 3], struct.unpack_from('<f', raw, o + 12)[0]
+                    hole = (t[2] & 4 and h < -0.3) or h < -1.0 or t[0] & 1
+                    g[(row, col)] = (bool(t[0] & 2) and not t[2] & 8, bool(hole), h)
+            grids[room] = g
+            ox, oz = rooms.cell_origin(room)
+            arrivals[room] = {(min(7, max(0, int((a.posZ - oz) / 1.5))), min(9, max(0, int((a.posX - ox) / 1.5))))
+                              for a in r.actors if a.name.decode(errors='ignore').startswith(INWARD_ARRIVALS)}
+        return grids[room]
+
+    def tiles(side, slot):
+        along = {slot // 2 - 1, slot // 2} if slot % 2 == 0 else {slot // 2}
+        n = 10 if side in 'NS' else 8
+        return [(a, {'N': (0, a), 'S': (7, a), 'W': (a, 0), 'E': (a, 9)}[side]) for a in sorted(along) if 0 <= a < n]
+
+    def line(side, a, i):
+        return {'N': (i, a), 'S': (7 - i, a), 'W': (a, i), 'E': (a, 9 - i)}[side]
+    out = {}
+    for room, v in sorted(cat.items()):
+        unit = v['unit']
+        try:
+            for u in unit:
+                grid(u)
+        except (OSError, TypeError, KeyError):
+            continue
+        pos = {rooms.cell_pos(u): u for u in unit}
+        c0, r0 = rooms.cell_pos(room)
+        external = set()  # doorway tiles of the unit's outer sides
+        for u in unit:
+            c, r = rooms.cell_pos(u)
+            for s, lst in openings(cat, u).items():
+                if (c + rooms.STEP[s][0], r + rooms.STEP[s][1]) in pos:
+                    continue
+                for sl, _, _ in lst:
+                    if not isinstance(sl, str):
+                        external |= {(u,) + t for _, t in tiles(s, sl)}
+        for s, lst in openings(cat, room).items():
+            if (c0 + rooms.STEP[s][0], r0 + rooms.STEP[s][1]) in pos:
+                continue  # (between cells of one unit: never jumps)
+            for sl, _, own in lst:
+                if isinstance(sl, str) or own:
+                    continue
+                g = grids[room]
+                ts = tiles(s, sl)
+                if not ts or any(g[t][0] or g[t][1] for _, t in ts):
+                    continue
+                top = max(g[t][2] for _, t in ts)
+                if top < 1.0:
+                    continue
+                ledge = False  # along the doorway's line: the raised tiles, then a solid one (a door frame: open floor)
+                for a, _ in ts:
+                    i = 0
+                    while i < 7 and not g[line(s, a, i)][0] and abs(g[line(s, a, i)][2] - top) <= 0.3:
+                        i += 1
+                    ledge |= i < 7 and g[line(s, a, i)][0]
+                if not ledge:
+                    continue
+                start = {(room,) + t for _, t in ts}
+                seen, todo = set(start), list(start)
+                while todo:  # the ledge: walkable tiles at about its height (steps up to 0.8: ramps), across the unit
+                    u, row, col = todo.pop()
+                    cu, ru = rooms.cell_pos(u)
+                    for dr, dc in ((0, 1), (1, 0), (0, -1), (-1, 0)):
+                        nr, nc, nu = row + dr, col + dc, u
+                        if not (0 <= nr < 8 and 0 <= nc < 10):
+                            p = (cu + (nc > 9) - (nc < 0), ru + (nr > 7) - (nr < 0))
+                            if p not in pos:
+                                continue
+                            nu, nr, nc = pos[p], nr % 8, nc % 10
+                        solid, hole, h = grids[nu][(nr, nc)]
+                        if not solid and not hole and abs(h - grids[u][(row, col)][2]) <= 0.8 and \
+                                (nu, nr, nc) not in seen:
+                            seen.add((nu, nr, nc))
+                            todo.append((nu, nr, nc))
+                if seen & (external - start):
+                    continue  # (a walkway on to another doorway)
+                if any(grids[u][(rw, cl)][2] < top - 0.8 for u, rw, cl in seen):
+                    continue  # (a ramp down to the floor: Key Cavern 01A's east strip)
+                near = {(u, rw + dr, cl + dc) for u, rw, cl in seen for dr in (-1, 0, 1) for dc in (-1, 0, 1)}
+                arrive = any((u,) + t in near for u in unit for t in arrivals[u])
+                out[(room, s, sl)] = 'arrival' if arrive else 'ledge'
+    return out
+
+
+def inward_only(romfs, cat_path=None, reviewed=True):
+    """{(room, side, slot): 'ledge' | 'arrival'}: doorways Link can come in through but never leave by - raised
+    doorway tiles walled off by a ledge from everything else of their unit ('arrival': the ledge holds stairs / a
+    player start - reached from there, not from the room). The tile-grid result plus INWARD_REVIEWED (reviewed=False:
+    the grids alone, for the test)."""
+    found = dict(_inward_only(romfs, cat_path or os.path.join(HERE, 'room_catalog.json')))
+    if reviewed:
+        for k, v in INWARD_REVIEWED.items():
+            found.setdefault(k, v)
+    return found
+
+
 def dead_ends(cat, level, layout):
     """[(cell, side, slot)]: doorways of a Chaos layout that can't jump and don't meet a matching neighbour."""
     pos = {cell_pos(k): k for k in layout}
@@ -1198,14 +1340,24 @@ def chaos_pairs(cat, level, layout, entrance, rng, romfs_for_tiles=None, madness
     by_comp = {}
     for st_ in stubs:
         by_comp.setdefault(find(st_[0]), []).append(st_)
+    # drop-down-only doorways (inward_only: Link never leaves through one) never carry the spanning tree / the ring:
+    # every piece hangs on by a doorway that works both ways, so the whole dungeon stays reachable and escapable; they
+    # pair among the rest (one-way extras, in only)
+    inward = inward_only(romfs_for_tiles) if romfs_for_tiles else {}
+
+    def oneway(x):
+        return (layout[x[1]], x[2], x[3]) in inward
     for v in by_comp.values():
         rng.shuffle(v)
+        v.sort(key=lambda x: not oneway(x))  # (two-way doorways last: pop() takes them first)
     order = sorted(comps)
     rng.shuffle(order)
     order.sort(key=lambda k: -len(by_comp.get(k, ())))  # pieces with many free doorways first (random among equals)
     pairs = []
     if any(k not in by_comp for k in order) and len(order) > 1:
         return None  # a piece without a free doorway can't be reached
+    if len(order) > 1 and any(all(oneway(x) for x in by_comp[k]) for k in order):
+        return None  # (a piece left only through drop-down-only doorways: Link would be stuck in it)
     if madness:
         return _with_followers(cat, level, layout, romfs_for_tiles, follow,
                                _madness_rows(level, layout, order, by_comp, rng, romfs_for_tiles, cat))
@@ -1275,9 +1427,12 @@ def _madness_rows(level, layout, order, by_comp, rng, romfs, cat):
         return []
     ring = [k for k in order if by_comp.get(k)]
     exits, arrivals = {}, {}
+    inward = inward_only(romfs) if romfs else {}
     for k in ring:
         v = by_comp[k][:]
         rng.shuffle(v)
+        # (the ring's way out of a piece: never a drop-down-only doorway - chaos_pairs made sure there is another)
+        v.sort(key=lambda x: (layout[x[1]], x[2], x[3]) in inward)
         exits[k], arrivals[k] = v[0], v[-1]  # (one doorway only: it's both)
     link = {}
     if len(ring) > 1:

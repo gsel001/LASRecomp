@@ -14,6 +14,7 @@ usage: seed_sweep.py <romfs> [-n seeds] [-j jobs] [--id SEED-ID ...] [--keep dir
 --miniboss-freq F: every random mix randomizes enemies with mini-boss frequency F (0 - 3: Normal, 2x, 3x, All), enemy
 mode Seeded or Random; --full: each seed is also generated in full (game files, enemies and all) and must finish -
 including its room-link check (room_links.py: every actor link within each room sound, else the game crashes there).
+Room-shuffled seeds are also checked for logic edges out through a drop-down-only doorway (room_logic.inward_exits).
 Exit status 1 if any seed fails either check. Run it with the LAS venv's Python (third_party/LAS-Randomizer/venv).
 """
 import argparse
@@ -231,6 +232,21 @@ def check_seed(out_dir, walk, needed=0):
     return own, strict, [(k, p['placements'][k], extra[k]) for k in lost]
 
 
+def inward_exits(out_dir, romfs):
+    """Room shuffle: logic edges out through a drop-down-only doorway (a ledge Link can't climb from his room:
+    room_logic.inward_exits) - [(level, cell, side, slot, target)], must be none."""
+    p = json.load(open(os.path.join(out_dir, 'placements.json')))
+    plan = p.get('room-plan')
+    if not plan:
+        return []
+    sys.path.insert(0, HERE)
+    sys.path.insert(0, LAS)
+    import room_logic
+    cat = json.load(open(os.path.join(HERE, 'room_catalog.json')))
+    return [(lv,) + x for lv, layout in sorted(plan['layouts'].items())
+            for x in room_logic.inward_exits(cat, romfs, lv, layout, plan['jumps'])]
+
+
 def run_one(job):
     sid, o, romfs, keep, walk, full = job
     tmp = tempfile.mkdtemp(prefix='sweep-', dir=keep)
@@ -247,6 +263,9 @@ def run_one(job):
         tail = (r.stderr.strip().splitlines() or ['?'])[-1]
         return sid, f'generator exit {r.returncode}: {tail}', None
     own, strict, lost = check_seed(os.path.join(tmp, 'out'), walk, o.get('triforce_needed', 0))
+    oneway = inward_exits(os.path.join(tmp, 'out'), romfs)
+    if oneway:
+        return sid, f'logic leaves through drop-down-only doorways: {oneway[:4]}', lost
     if full and not own and not strict:  # (the whole seed: enemies, mini-bosses, every room edit)
         env = dict(os.environ, PYTHONHASHSEED='0')
         env.pop('LARECOMP_CHECK_ONLY', None)
