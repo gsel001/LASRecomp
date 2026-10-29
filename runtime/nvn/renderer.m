@@ -3102,10 +3102,10 @@ static bool wx_dm1;  // (its depth mode: -1..1)
 // 7 where it passes - clear for the level's model, set for anything else and for the water (part of the level's
 // model, told by its maps) - so each pixel ends up telling whether what shows there takes snow. The cover goes on in
 // a pass of its own on the scene's colour target right before the first blended draw: from the scene depth, its
-// stencil (bit 7: left alone) and the camera (vertex constant slot 1, 1024 bytes: the view-projection first). One full-screen triangle (reading
-// the colour under it: Apple GPUs' framebuffer fetch); the footprints come from a world-anchored trail map (1024 x
-// 1024 texels over 32 x 32 units, wrapping; each texel the time a print was made there, its height and its 32-unit
-// cell), stamped first (a quad per new print).
+// stencil (bit 7: left alone) and the camera (vertex constant slot 1, 1024 bytes: the view-projection first). One
+// full-screen triangle (reading the colour under it: Apple GPUs' framebuffer fetch); the footprints come from a
+// world-anchored trail map (1024 x 1024 texels over 32 x 32 units, wrapping; each texel the time a print was made
+// there, its height and its 32-unit cell), stamped first (a quad per new print).
 static const char *sc_src =
     "#include <metal_stdlib>\n"
     "using namespace metal;\n"
@@ -3168,42 +3168,85 @@ static const char *sc_src =
     "  }\n"
     "  return s;\n"
     "}\n"
+    "constant float2 sc_hex[6] = {float2(1.0, 0.0), float2(0.5, 0.866), float2(-0.5, 0.866), float2(-1.0, 0.0), float2(-0.5, -0.866), float2(0.5, -0.866)};\n"
+    "constant float2 sc_ring[8] = {float2(0.924, 0.383), float2(0.383, 0.924), float2(-0.383, 0.924), float2(-0.924, 0.383),\n"
+    "                              float2(-0.924, -0.383), float2(-0.383, -0.924), float2(0.383, -0.924), float2(0.924, -0.383)};\n"
     "fragment half4 sc_fs(VO in [[stage_in]], constant SF &w [[buffer(0)]], depth2d<float> dt [[texture(0)]],\n"
     "                     texture2d<float> tr [[texture(1)]], texture2d<uint> sv [[texture(2)]], half4 dst [[color(0)]]) {\n"
     "  float2 uv = in.pos.xy / w.screen.xy;\n"
     "  int2 mx = int2(w.screen.zw) - 1;\n"
     "  int2 q = clamp(int2(uv * w.screen.zw), int2(0), mx);\n"
     "  uint4 sm = sv.read(uint2(q));\n"
-    "  if (w.trail.y > 1.5) return half4((sm.r & 0x80u) ? 1.0h : 0.0h, (sm.r & 1u) ? 1.0h : 0.0h, 0.0h, 1.0h);\n"  // (test)
+    "  if (abs(w.trail.y - 2.0) < 0.5) return half4((sm.r & 0x80u) ? 1.0h : 0.0h, (sm.r & 1u) ? 1.0h : 0.0h, 0.0h, 1.0h);\n"  // (test)
     "  if (sm.r & 0x80u) return dst;\n"  // (a character: no snow on it)
     "  float d = dt.read(uint2(q));\n"
     "  if (d >= 0.99999) return dst;\n"
     "  float2 e = 1.0 / w.screen.zw;\n"
-    "  float3 p = world_at(w, uv, d);\n"
-    // the surface's normal from the depth beside it (on each axis the nearer neighbour: no normals across edges)
-    "  float dl = dt.read(uint2(clamp(q - int2(1, 0), int2(0), mx))), dr = dt.read(uint2(clamp(q + int2(1, 0), int2(0), mx)));\n"
-    "  float du = dt.read(uint2(clamp(q - int2(0, 1), int2(0), mx))), dd = dt.read(uint2(clamp(q + int2(0, 1), int2(0), mx)));\n"
-    "  float3 a = abs(dr - d) < abs(dl - d) ? world_at(w, uv + float2(e.x, 0.0), dr) - p : p - world_at(w, uv - float2(e.x, 0.0), dl);\n"
-    "  float3 b = abs(dd - d) < abs(du - d) ? world_at(w, uv + float2(0.0, e.y), dd) - p : p - world_at(w, uv - float2(0.0, e.y), du);\n"
-    "  float3 n = normalize(cross(b, a));\n"
+    // the surface's normal over a ring of 6 depth samples ~6 pixels (at 1080p) around it: the cross products of
+    // neighbouring samples, summed (a plane fit). Samples across a depth gap (further than 3x the ring's own size at
+    // this depth) are left out: no normals across edges, and seams, one-pixel steps and leaves average out - stable
+    // as the view moves. flat: how alike the pieces were (1 a plane, lower on leaves and bumpy models)
+    "  float rad = max(2.0, round(6.0 * w.screen.w / 1080.0));\n"
+    "  float3 p = world_at(w, (float2(q) + 0.5) * e, d), v[6];\n"  // (on the depth's own grid, as the ring)
+    "  float lim = 3.0 * length(world_at(w, (float2(q) + float2(0.5 + rad, 0.5)) * e, d) - p);\n"
+    "  bool ok[6];\n"
+    "  int nok = 0;\n"
+    "  for (int i = 0; i < 6; i++) {\n"
+    "    int2 o = int2(round(sc_hex[i] * rad));\n"
+    "    int2 qq = clamp(q + o, int2(0), mx);\n"
+    "    float dk = dt.read(uint2(qq));\n"
+    "    v[i] = world_at(w, (float2(qq) + 0.5) * e, dk) - p;\n"
+    "    ok[i] = dk < 0.99999 && length(v[i]) < lim && any(o != int2(0));\n"
+    "    nok += ok[i] ? 1 : 0;\n"
+    "  }\n"
+    "  float3 ns = float3(0.0);\n"
+    "  float nl = 0.0;\n"
+    "  for (int i = 0; i < 6; i++) {\n"
+    "    int j = i == 5 ? 0 : i + 1;\n"
+    "    if (!ok[i] || !ok[j]) continue;\n"
+    "    float3 c = cross(v[i], v[j]);\n"
+    "    ns += c; nl += length(c);\n"
+    "  }\n"
+    "  if (nok < 2 || nl <= 0.0 || length(ns) < 1e-9) return dst;\n"
+    "  float3 n = normalize(ns);\n"
+    "  float flat = length(ns) / nl;\n"
     "  float4 cq = float4(w.ivp[0].z * -1.0 + w.ivp[0].w, w.ivp[1].z * -1.0 + w.ivp[1].w, w.ivp[2].z * -1.0 + w.ivp[2].w, w.ivp[3].z * -1.0 + w.ivp[3].w);\n"
     "  if (dot(n, cq.xyz / cq.w - p) < 0.0) n = -n;\n"  // (facing the camera)
-    "  float up = smoothstep(0.45, 0.8, n.y);\n"
+    // how much faces up (soft), less on bumpy models, faded out near depth edges (where the ring is cut)
+    "  float rough = saturate((0.9 - flat) / 0.6);\n"
+    "  float up = smoothstep(0.35, 0.85, n.y) * (1.0 - 0.45 * rough) * smoothstep(2.0, 4.5, float(nok));\n"
+    "  float3 c = float3(dst.rgb);\n"
+    "  float mc = max(c.r, max(c.g, c.b));\n"
     // patchy at first (where the noise is low), then everywhere; thin at first, then thick
     "  float cover = w.flags.z;\n"
     "  float2 pr = float2(p.x * 0.8 + p.z * 0.6, p.z * 0.8 - p.x * 0.6);\n"  // (turned: no grid-aligned patches)
-    "  float nz = vnoise(pr * 0.4) * 0.6 + vnoise(pr * 1.3) * 0.28 + vnoise(pr * 4.1) * 0.12;\n"
-    "  float patch = smoothstep(0.0, 1.0, saturate((cover * 1.45 - nz) / 0.22));\n"
-    "  float dust = 0.35 * smoothstep(0.0, 0.4, cover) * (0.5 + 0.5 * vnoise(pr * 7.0));\n"  // (a light dusting first)
+    "  float nz = vnoise(pr * 0.4) * 0.65 + vnoise(pr * 1.3) * 0.35;\n"
+    "  float patch = smoothstep(0.0, 1.0, saturate((cover * 1.45 - nz) / 0.25));\n"
+    "  float dust = 0.35 * smoothstep(0.0, 0.4, cover) * (0.6 + 0.4 * vnoise(pr * 2.5));\n"  // (a light dusting first)
     "  float k = up * max(patch * (0.45 + 0.55 * smoothstep(0.0, 0.85, cover)), dust);\n"
+    "  if (k <= 0.0) return dst;\n"
+    // openings - doorways, windows, holes: none in there. What shows through one is hemmed in: most of a wider ring
+    // (~48 pixels: a doorway is ~100 wide, a window ~40) rises well above its surface's plane (ground by a wall has
+    // the wall on one side only; ground in front of the opening lies in the plane). Only the level's model counts,
+    // not a character or a fence post standing by (Link in a doorway). Not by its darkness: shadows on the ground
+    // are as dark as a doorway
+    "  int above = 0, valid = 0;\n"
+    "  for (int i = 0; i < 8; i++) {\n"
+    "    int2 qq = clamp(q + int2(round(sc_ring[i] * rad * 8.0)), int2(0), mx);\n"
+    "    float dk = dt.read(uint2(qq));\n"
+    "    if (dk >= 0.99999 || (sv.read(uint2(qq)).r & 0x80u)) continue;\n"
+    "    valid++;\n"
+    "    if (dot(world_at(w, (float2(qq) + 0.5) * e, dk) - p, n) > 0.3) above++;\n"
+    "  }\n"
+    "  if (valid >= 3) k *= 1.0 - smoothstep(0.45, 0.62, float(above) / float(valid));\n"
     "  if (k <= 0.0) return dst;\n"
     "  float fp = sc_print(w, tr, p);\n"
     "  if (w.trail.y > 0.5) return half4(mix(dst, half4(1.0, 0.0, 0.0, 1.0), half(k)));\n"
     "  k *= 1.0 - saturate(fp) * (0.9 - 0.45 * cover);\n"  // (a dent in deep snow, the ground through a thin layer)
-    // the snow's light: the picture's own (its shadows stay), the slope, a faint grain
-    "  float3 c = float3(dst.rgb);\n"
-    "  float lit = saturate(max(c.r, max(c.g, c.b)) / w.tone.w);\n"
-    "  float3 col = w.tone.rgb * (0.4 + 0.6 * lit) * (0.85 + 0.15 * n.y) * (0.96 + 0.06 * hash2(floor(p.xz * 40.0)));\n"
+    // the snow's light: the picture's own (its shadows stay; evened out on bumpy models, whose pixels flicker
+    // between leaf and gap), the slope, a soft unevenness
+    "  float lit = mix(saturate(mc / w.tone.w), 0.8, rough * 0.7);\n"
+    "  float3 col = w.tone.rgb * (0.45 + 0.55 * lit) * (0.85 + 0.15 * n.y) * (0.96 + 0.06 * vnoise(pr * 3.0));\n"
     "  col *= float3(1.0 - 0.5 * saturate(fp), 1.0 - 0.42 * saturate(fp), 1.0 - 0.28 * saturate(fp));\n"  // (its shade: blue-grey)
     "  return half4(half3(mix(c, col, k)), dst.a);\n"
     "}\n";
@@ -3348,8 +3391,24 @@ static void snow_cover_check(CmdRec *r, bool indexed, Prog *pr) {
     }
     // the depth pre-pass and the colour pass' opaque draws (Link and the water are only in that one)
     if (st.ds[0] && (st.ds[1] || (st.rt.ncolor && !blended)) && st.rt.depth->width == wx_scene_w &&
-        st.rt.depth->height == wx_scene_h && st.rt.depth->format == 0x35)
+        st.rt.depth->height == wx_scene_h && st.rt.depth->format == 0x35) {
+        // A level draw the pre-pass left out takes no snow: its depth isn't in the scene depth (what shows there has
+        // the depth of whatever is behind it) - the floor decals seen through the houses' doorways. Told by the draw's
+        // arguments and vertex buffer: the same in both passes
+        enum { SIGS = 4096 };
+        static uint64_t sig[SIGS], sig_at[SIGS];
+        uint64_t h = hmix(hmix(0xcbf29ce484222325ull, r->x, sizeof r->x), &st.vbuf[0].addr, sizeof st.vbuf[0].addr) | 1;
+        uint32_t k = (uint32_t)(h ^ h >> 32) & (SIGS - 1);
+        if (level && !st.rt.ncolor) {
+            for (int n = 0; n < 16 && sig_at[k] == frame && sig[k] != h; n++) k = (k + 1) & (SIGS - 1);
+            sig[k] = h, sig_at[k] = frame;
+        } else if (level) {
+            bool found = false;
+            for (int n = 0; n < 16 && sig_at[k] == frame && !found; n++) found = sig[k] == h, k = (k + 1) & (SIGS - 1);
+            level = found;
+        }
         sc_mark = level ? 1 : 2;
+    }
     if (!scene || !level || blended || !st.ds[0]) return;
     sc_color = st.rt.color[0], sc_depth = st.rt.depth, sc_frame = frame;
     memcpy(sc_vp, (const float *)(uintptr_t)st.ubuf[0][1].addr, sizeof sc_vp);
