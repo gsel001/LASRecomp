@@ -3672,27 +3672,112 @@ static void draw_one(CmdRec *r, bool indexed) {
 // Drawn into the window image right after the game's scene composite (before the HUD), at the internal resolution:
 // the upscaler and anything after it treat it as part of the game's picture. One pass of its own on the window image
 // (load / store; the game's next draw opens its pass again): the overcast / lightning fill, the rain streaks or snow
-// flakes (instanced quads; each fragment compared with the scene depth at its pixel: behind it, dropped), the
-// splashes (rings on the ground at hashed screen points, placed in the world by the scene depth there). The scene
+// flakes (instanced quads; each fragment compared with the scene depth at its pixel: behind it, dropped; where a
+// drop's column meets the scene, by the scene depth, it ends - a flake lies there a while), the splashes (a ring
+// where a drop landed). The scene
 // depth is read as a texture, never bound as an attachment. Shaders kept plain (a GLSL port: the same math).
 static const char *wx_src =
     "#include <metal_stdlib>\n"
     "using namespace metal;\n"
-    "struct WF { float4 vp[4]; float4 ivp[4]; float4 origin, box, shape, color, screen, flags, fill, zr; uint count, splashes; int kind; };\n"
+    "struct WF { float4 vp[4]; float4 ivp[4]; float4 origin, box, shape, color, screen, flags, fill, zr, cam; uint count, splashes; int kind; };\n"
     "struct VO { float4 pos [[position]]; float2 uv; float a; };\n"
     "static uint pcg(uint v) { uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }\n"
     "static float h1(uint v) { return float(pcg(v)) * (1.0 / 4294967296.0); }\n"
-    "static float4 clip_of(constant WF &w, float3 p) {\n"  // the game's clip space, then as the game's draws reach Metal
+    "static float4 game_clip(constant WF &w, float3 p) {\n"  // the game's clip space
     "  float4 q = float4(p, 1.0);\n"
-    "  float4 c = float4(dot(w.vp[0], q), dot(w.vp[1], q), dot(w.vp[2], q), dot(w.vp[3], q));\n"
+    "  return float4(dot(w.vp[0], q), dot(w.vp[1], q), dot(w.vp[2], q), dot(w.vp[3], q));\n"
+    "}\n"
+    "static float4 clip_of(constant WF &w, float3 p) {\n"  // the game's clip space, then as the game's draws reach Metal
+    "  float4 c = game_clip(w, p);\n"
     "  if (w.flags.x > 0.5) c.y = -c.y;\n"
     "  if (w.flags.y > 0.5) c.z = (c.z + c.w) * 0.5;\n"
     "  c.z = w.zr.x * c.w + w.zr.y * c.z;\n"  // (the scene's depth range)
     "  if (w.flags.z > 0.5) c.x = -c.x;\n"
     "  return c;\n"
     "}\n"
-    // rain streaks / snow flakes: instance i at a hashed spot of the volume, which wraps around its centre (so a drop
-    // stays where it is in the world as the camera scrolls), falling with time
+    "static float3 world_at(constant WF &w, float2 uv, float d) {\n"  // the world point of the scene depth d at uv
+    "  float2 m = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);\n"  // (back to the game's clip space)
+    "  if (w.flags.x > 0.5) m.y = -m.y;\n"
+    "  float z = (d - w.zr.x) / w.zr.y;\n"
+    "  if (w.flags.y > 0.5) z = z * 2.0 - 1.0;\n"
+    "  float4 q = float4(m, z, 1.0);\n"
+    "  float4 wp = float4(dot(w.ivp[0], q), dot(w.ivp[1], q), dot(w.ivp[2], q), dot(w.ivp[3], q));\n"
+    "  return wp.xyz / wp.w;\n"
+    "}\n"
+    // a drop / flake at time tt: instance i at a hashed spot, moving through the world at its own fall speed (and
+    // the wind); the volume wraps around its centre on all three axes, so a drop keeps its world position as the
+    // volume follows the view (only one that leaves it comes back on the far side). age: since it came in at the top
+    "static float3 wx_drop(constant WF &w, uint iid, float tt, thread float &speed, thread float &age) {\n"
+    "  float3 sz = float3(w.box.x, w.box.y, w.box.x);\n"
+    "  float3 r = float3(h1(iid * 3u + 1u), h1(iid * 3u + 2u), h1(iid * 3u + 3u));\n"
+    "  speed = w.shape.z * (0.8 + 0.4 * h1(iid * 7u + 5u));\n"
+    "  float3 lo = w.origin.xyz - 0.5 * sz;\n"
+    "  float3 f = fract((r * sz + float3(w.box.w, -speed, 0.0) * tt - lo) / sz);\n"
+    "  age = (1.0 - f.y) * sz.y / speed;\n"
+    "  float3 p = lo + f * sz;\n"
+    "  if (abs(w.flags.w - 2.0) < 0.5) {\n"  // snow: a gentle sway
+    "    float ph = r.x * 40.0 + r.z * 17.0;\n"
+    "    p.x += w.shape.w * sin(tt * 1.3 + ph);\n"
+    "    p.z += w.shape.w * cos(tt * 1.1 + ph * 1.7);\n"
+    "  }\n"
+    "  return p;\n"
+    "}\n"
+    // what the scene shows under a world point: where its column shows on screen at the ground's height, the scene
+    // depth there back in the world; again from that point's height until it settles (a roof, a slope). false: sky,
+    // off screen, or not under it (a wall in front of the column, still climbing: what the drop meets is hidden), or
+    // no floor (a wall: its normal from the depth beside it)
+    "static bool wx_surface(constant WF &w, depth2d<float> dt, float3 p, thread float3 &s) {\n"
+    "  float y = w.origin.w, dy = 1e9;\n"
+    "  float2 uv;\n"
+    "  for (int k = 0; k < 4 && dy > 0.05; k++) {\n"
+    "    float4 c = game_clip(w, float3(p.x, y, p.z));\n"
+    "    if (c.w <= 0.0) return false;\n"
+    "    float2 m = c.xy / c.w;\n"
+    "    if (any(abs(m) > 1.0)) return false;\n"
+    "    if (w.flags.x > 0.5) m.y = -m.y;\n"
+    "    uv = float2(m.x * 0.5 + 0.5, 0.5 - m.y * 0.5);\n"
+    "    float d = dt.read(uint2(uv * (w.screen.zw - 1.0)));\n"
+    "    if (d >= 0.99999) return false;\n"
+    "    s = world_at(w, uv, d);\n"
+    "    dy = abs(s.y - y);\n"
+    "    y = s.y;\n"
+    "  }\n"
+    "  if (dy > 0.5 || distance(s.xz, p.xz) > 1.0) return false;\n"
+    "  float2 e = 2.0 / w.screen.zw;\n"
+    "  uint2 q = uint2(uv * (w.screen.zw - 1.0));\n"
+    "  float3 a = world_at(w, uv + float2(e.x, 0.0), dt.read(min(q + uint2(2u, 0u), uint2(w.screen.zw - 1.0))));\n"
+    "  float3 b = world_at(w, uv + float2(0.0, e.y), dt.read(min(q + uint2(0u, 2u), uint2(w.screen.zw - 1.0))));\n"
+    "  float3 n = cross(a - s, b - s);\n"
+    "  return abs(n.y) > 0.6 * length(n);\n"
+    "}\n"
+    // has drop i met the scene under it, in this fall or at the end of the last one (it came in at the top since)?
+    // since: how long ago, s: where (the column as it was then: what it left there stays put while the wind and the
+    // sway go on). A drop that landed in this fall: since <= age
+    "static bool wx_landed(constant WF &w, depth2d<float> dt, uint iid, float3 p, float speed, float age,\n"
+    "                      thread float &since, thread float3 &s) {\n"
+    "  float sp, ag;\n"
+    "  if (wx_surface(w, dt, p, s) && p.y < s.y) since = (s.y - p.y) / speed;\n"
+    "  else {\n"
+    "    if (age > w.cam.w) return false;\n"
+    "    float3 q = wx_drop(w, iid, w.box.z - age - 1e-3, sp, ag);\n"  // (its last moment in the last fall: the bottom)
+    "    if (!wx_surface(w, dt, q, s) || q.y >= s.y) return false;\n"
+    "    since = age + 1e-3 + (s.y - q.y) / speed;\n"
+    "  }\n"
+    "  float3 q = wx_drop(w, iid, w.box.z - since, sp, ag), s0 = s;\n"
+    "  if (!wx_surface(w, dt, q, s)) s = float3(q.x, s0.y, q.z);\n"  // (gone from view since: where it would be)
+    "  return true;\n"
+    "}\n"
+    "static float wx_fade(constant WF &w, float3 p) {\n"  // (near the volume's top and sides: drops come and go there)
+    "  float2 e = 0.5 * w.box.x - abs(p.xz - w.origin.xz);\n"
+    "  return saturate((w.origin.y + 0.5 * w.box.y - p.y) / 1.5) * saturate(min(e.x, e.y) / 2.0);\n"
+    "}\n"
+    "static float4 wx_flake(constant WF &w, uint iid, float3 p, float2 corner) {\n"  // a flake's corner (clip space)
+    "  float4 c = clip_of(w, p), ref = clip_of(w, w.origin.xyz);\n"
+    "  float size = w.shape.y * (0.6 + 0.8 * h1(iid * 11u + 3u)) * w.screen.y / 1080.0 * clamp(ref.w / c.w, 0.5, 2.0);\n"
+    "  c.xy += corner * size / w.screen.xy * c.w;\n"
+    "  return c;\n"
+    "}\n"
+    // rain streaks / snow flakes, up to where they meet the scene (what they leave there: wx_splash_vs)
     "vertex VO wx_vs(uint vid [[vertex_id]], uint iid [[instance_id]], constant WF &w [[buffer(0)]],\n"
     "                depth2d<float> dt [[texture(0)]], device float *probe [[buffer(1)]]) {\n"
     "  VO o;\n"
@@ -3700,31 +3785,21 @@ static const char *wx_src =
     "    const float2 pu[5] = {float2(0.5, 0.5), float2(0.3, 0.35), float2(0.7, 0.35), float2(0.3, 0.65), float2(0.7, 0.65)};\n"
     "    for (uint k = 0u; k < 5u; k++) probe[k] = dt.read(uint2(pu[k] * (w.screen.zw - 1.0)));\n"
     "  }\n"
-    "  float S = w.box.x, H = w.box.y, t = w.box.z;\n"
-    "  float3 r = float3(h1(iid * 3u + 1u), h1(iid * 3u + 2u), h1(iid * 3u + 3u));\n"
-    "  float speed = w.shape.z * (0.8 + 0.4 * h1(iid * 7u + 5u));\n"
-    "  float fallen = fmod(r.y * H + t * speed, H);\n"
-    "  float drift = w.box.w / speed * fallen;\n"
-    "  float3 p;\n"
-    "  p.x = w.origin.x + (fract((r.x * S + drift - w.origin.x) / S) - 0.5) * S;\n"
-    "  p.z = w.origin.z + (fract((r.z * S - w.origin.z) / S) - 0.5) * S;\n"
-    "  p.y = w.origin.y + 0.5 * H - fallen;\n"
+    "  float speed, age;\n"
+    "  float3 p = wx_drop(w, iid, w.box.z, speed, age), s;\n"
+    "  bool test = w.flags.w > 2.5;\n"  // (test: poles)
+    "  o.uv = float2(0.0); o.a = 0.0;\n"
+    "  if (!test && wx_surface(w, dt, p, s) && p.y < s.y) { o.pos = float4(0.0, 0.0, -2.0, 1.0); return o; }\n"
+    "  float a = w.color.a * wx_fade(w, p);\n"
     "  float px = w.screen.y / 1080.0;\n"  // (sizes in pixels at 1080p)
     "  float2 corner = float2((vid & 1u) ? 1.0 : -1.0, (vid & 2u) ? 1.0 : -1.0);\n"
-    "  if (abs(w.flags.w - 2.0) < 0.5) {\n"  // snow: a round flake, nearer ones bigger; a gentle sway
-    "    float ph = r.x * 40.0 + r.z * 17.0;\n"
-    "    p.x += w.shape.w * sin(t * 1.3 + ph);\n"
-    "    p.z += w.shape.w * cos(t * 1.1 + ph * 1.7);\n"
-    "    float4 c = clip_of(w, p);\n"
-    "    float4 ref = clip_of(w, w.origin.xyz);\n"
-    "    float size = w.shape.y * (0.6 + 0.8 * h1(iid * 11u + 3u)) * px * clamp(ref.w / c.w, 0.5, 2.0);\n"
-    "    c.xy += corner * size / w.screen.xy * c.w;\n"
-    "    o.pos = c; o.uv = corner; o.a = w.color.a;\n"
+    "  if (abs(w.flags.w - 2.0) < 0.5) {\n"  // snow: a round flake, nearer ones bigger
+    "    o.pos = wx_flake(w, iid, p, corner); o.uv = corner; o.a = a;\n"
     "    return o;\n"
     "  }\n"
     "  float3 dir = normalize(float3(w.box.w, -speed, 0.0));\n"  // rain: a streak along its fall
     "  float3 tail = p - dir * w.shape.x * (0.7 + 0.6 * h1(iid * 13u + 7u));\n"
-    "  if (w.flags.w > 2.5) { p.y = w.origin.y - 0.5 * H; tail = p + float3(0.0, 6.0, 0.0); }\n"  // (test: poles)
+    "  if (test) { p.y = w.origin.w; tail = p + float3(0.0, 6.0, 0.0); }\n"
     "  float4 ch = clip_of(w, p), ct = clip_of(w, tail);\n"
     "  float2 sh = ch.xy / ch.w * w.screen.xy, st = ct.xy / ct.w * w.screen.xy;\n"
     "  float2 d = sh - st;\n"
@@ -3732,7 +3807,7 @@ static const char *wx_src =
     "  float2 n = float2(-d.y, d.x) * w.shape.y * px;\n"
     "  float4 c = corner.y > 0.0 ? ch : ct;\n"
     "  c.xy += corner.x * n / w.screen.xy * c.w;\n"
-    "  o.pos = c; o.uv = corner; o.a = corner.y > 0.0 ? w.color.a : 0.0;\n"
+    "  o.pos = c; o.uv = corner; o.a = corner.y > 0.0 ? a : 0.0;\n"
     "  return o;\n"
     "}\n"
     "static bool wx_hidden(constant WF &w, depth2d<float> dt, float4 pos) {\n"  // behind the scene at this pixel?
@@ -3748,33 +3823,35 @@ static const char *wx_src =
     "  else a = in.a * (1.0 - in.uv.x * in.uv.x);\n"
     "  return float4(w.color.rgb, a);\n"
     "}\n"
-    // splashes: each slot lives 0.35 s at a time, at a new hashed screen point each time; the scene depth there gives
-    // the world point (ground, roof, water), where a small ring opens on the level plane
+    // what a drop leaves where it landed, for cam.w s (splash k: drop k * (count / splashes)'s): rain a small ring
+    // opening on the level plane, snow the flake lying there (moved a little toward the camera, so the scene depth
+    // there doesn't hide it), fading
     "vertex VO wx_splash_vs(uint vid [[vertex_id]], uint iid [[instance_id]], constant WF &w [[buffer(0)]],\n"
     "                       depth2d<float> dt [[texture(0)]]) {\n"
     "  VO o;\n"
-    "  float life = 0.35, tt = w.box.z / life + h1(iid * 5u + 9u);\n"
-    "  uint cyc = uint(tt);\n"
-    "  float age = fract(tt);\n"
-    "  float2 uv = float2(h1(iid * 131u + cyc * 7919u), h1(iid * 733u + cyc * 104729u + 17u));\n"
-    "  float d = dt.read(uint2(uv * (w.screen.zw - 1.0)));\n"
+    "  uint i = iid * max(w.count / max(w.splashes, 1u), 1u);\n"
+    "  float speed, age, since;\n"
+    "  float3 p = wx_drop(w, i, w.box.z, speed, age), s;\n"
     "  o.uv = float2(0.0); o.a = 0.0;\n"
-    "  if (d >= 0.99999) { o.pos = float4(0.0, 0.0, -2.0, 1.0); return o; }\n"  // (sky / nothing there: none)
-    "  float2 m = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);\n"  // (back to the game's clip space)
-    "  if (w.flags.x > 0.5) m.y = -m.y;\n"
-    "  float z = (d - w.zr.x) / w.zr.y;\n"
-    "  if (w.flags.y > 0.5) z = z * 2.0 - 1.0;\n"
-    "  float4 q = float4(m, z, 1.0);\n"
-    "  float4 wp = float4(dot(w.ivp[0], q), dot(w.ivp[1], q), dot(w.ivp[2], q), dot(w.ivp[3], q));\n"
-    "  wp /= wp.w;\n"
+    "  if (!wx_landed(w, dt, i, p, speed, age, since, s) || since > w.cam.w) { o.pos = float4(0.0, 0.0, -2.0, 1.0); return o; }\n"
+    "  float k = since / w.cam.w;\n"
     "  float2 corner = float2((vid & 1u) ? 1.0 : -1.0, (vid & 2u) ? 1.0 : -1.0);\n"
-    "  float rad = w.shape.x * 0.12 * (0.3 + age);\n"
-    "  o.pos = clip_of(w, wp.xyz + float3(corner.x, 0.0, corner.y) * rad);\n"
-    "  o.uv = corner; o.a = w.color.a * 1.4 * (1.0 - age);\n"
+    "  o.uv = corner;\n"
+    "  if (abs(w.flags.w - 2.0) < 0.5) {\n"
+    "    o.pos = wx_flake(w, i, s + normalize(w.cam.xyz - s) * 0.3, corner); o.a = w.color.a * (1.0 - k);\n"
+    "    return o;\n"
+    "  }\n"
+    "  float rad = w.shape.x * 0.12 * (0.3 + k);\n"
+    "  o.pos = clip_of(w, s + float3(corner.x, 0.0, corner.y) * rad);\n"
+    "  o.a = w.color.a * 1.4 * (1.0 - k);\n"
     "  return o;\n"
     "}\n"
-    "fragment float4 wx_splash_fs(VO in [[stage_in]], constant WF &w [[buffer(0)]]) {\n"
+    "fragment float4 wx_splash_fs(VO in [[stage_in]], constant WF &w [[buffer(0)]], depth2d<float> dt [[texture(0)]]) {\n"
     "  float r = length(in.uv);\n"
+    "  if (abs(w.flags.w - 2.0) < 0.5) {\n"  // (a lying flake: behind something now - Link walking over it - hidden)
+    "    if (wx_hidden(w, dt, in.pos)) discard_fragment();\n"
+    "    return float4(w.color.rgb, in.a * (1.0 - smoothstep(0.5, 1.0, r)));\n"
+    "  }\n"
     "  float ring = smoothstep(0.45, 0.75, r) * (1.0 - smoothstep(0.8, 1.0, r));\n"
     "  return float4(w.color.rgb, in.a * ring);\n"
     "}\n"

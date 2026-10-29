@@ -17,7 +17,6 @@ extern int cosmetics_seed_weather(void);       // runtime/cosmetics_seed.c
 extern bool widescreen_frame_boxed(uint64_t frame);  // runtime/hle/widescreen.c (indoors: the interior backdrop)
 extern void input_rumble_pulse(uint16_t lo, uint16_t hi, uint32_t ms);  // runtime/hle/input.c
 
-static const float g_unit_w = 23.5f;  // the ground's width (world units) the overworld camera shows at 16:9 (Field_11C)
 static float g_cam[80];  // the frame's camera block (weather_scene_camera)
 static uint64_t g_cam_frame = ~0ull;
 
@@ -179,7 +178,7 @@ bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PR
 
     // (screen, flags, zr: filled by the renderer)
     memset(f->origin, 0, sizeof f->origin), memset(f->box, 0, sizeof f->box), memset(f->shape, 0, sizeof f->shape);
-    memset(f->color, 0, sizeof f->color), memset(f->fill, 0, sizeof f->fill);
+    memset(f->color, 0, sizeof f->color), memset(f->fill, 0, sizeof f->fill), memset(f->cam, 0, sizeof f->cam);
     f->count = f->splashes = 0;
     f->kind = kind;
     memcpy(f->vp, g_cam + 32, sizeof f->vp);
@@ -201,36 +200,42 @@ bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PR
         ground = fabsf(g - ground) > 6 || frame > ground_frame + 4 ? g : ground + (g - ground) * 0.1f;
         ground_frame = frame;
     }
-    // the volume: around the ground point at the screen's centre, as wide as the view's ground
+    // the volume: around the ground point at the screen's centre, of a fixed size (a drop's place in the world comes
+    // from its hash, the time and the size only: the volume can follow the view and the ground without moving one)
     float c[3], a[3], b[3];
     if (!unproject_floor(f->inv_vp, 0, 0, ground, c) || !unproject_floor(f->inv_vp, -1, -1, ground, a) ||
         !unproject_floor(f->inv_vp, 1, 1, ground, b))
         return false;
     float w = fabsf(b[0] - a[0]), d = fabsf(b[2] - a[2]);
     // the camera (from the view matrix: -R^T t); the volume stays well below it (drops near the lens would be huge)
-    // and leans toward it as the view does (its middle on the centre ray, half way up)
+    // and leans toward it as the view does (its middle on the centre ray)
     float cp[3];
     for (int i = 0; i < 3; i++) cp[i] = -(g_cam[0 * 4 + i] * g_cam[3] + g_cam[1 * 4 + i] * g_cam[7] + g_cam[2 * 4 + i] * g_cam[11]);
     float cam_h = cp[1] - c[1];
     if (!(cam_h > 1)) return false;
-    float height = cam_h * 0.55f, mid = height * 0.5f - cam_h * 0.08f;
-    float size = fmaxf(w, d) * 1.3f;
+    // (the overworld camera: ~17.7 above the ground, its view ~24 x 19 of it; the volume from 1.5 under the ground to
+    // 8.5 over it, half way to the camera)
+    const float size = 34, height = 10, mid = height * 0.5f - 1.5f;
     bool snow = kind == WEATHER_SNOW, storm = kind == WEATHER_STORM;
-    for (int i = 0; i < 3; i++) f->origin[i] = c[i] + (cp[i] - c[i]) * (mid / cam_h);
+    for (int i = 0; i < 3; i++) f->origin[i] = c[i] + (cp[i] - c[i]) * fminf(mid / cam_h, 0.5f);
+    f->origin[3] = ground;
     f->box[0] = size, f->box[1] = height, f->box[2] = (float)fmod(t, 3600.0);
-    // (sizes in world units, from the view's width: u = 1 at the overworld camera's usual floor width)
-    float u = w / g_unit_w;
+    for (int i = 0; i < 3; i++) f->cam[i] = cp[i];
+    // (fall speeds and the wind fixed too: with the time in them, any change would move every drop)
     if (snow) {
         f->count = 2000;
-        f->shape[0] = 0, f->shape[1] = 9.0f, f->shape[2] = 2.2f * u, f->shape[3] = 0.5f * u;
-        f->box[3] = 0.6f * u;
+        f->shape[0] = 0, f->shape[1] = 9.0f, f->shape[2] = 2.2f, f->shape[3] = 0.5f;
+        f->box[3] = 0.6f;
+        f->splashes = f->count;  // (every flake lies where it landed)
+        f->cam[3] = 1.5f;  // (for 1.5 s, fading)
         f->color[0] = 0.97f, f->color[1] = 0.98f, f->color[2] = 1.0f, f->color[3] = 0.9f;
         f->fill[3] = 1;  // (no overcast: snow is bright)
     } else {
         f->count = storm ? 2000 : 1300;
-        f->splashes = storm ? 170 : 110;
-        f->shape[0] = (storm ? 2.6f : 2.2f) * u, f->shape[1] = 1.9f, f->shape[2] = (storm ? 36 : 30) * u;
-        f->box[3] = (storm ? 8 : 3) * u;
+        f->splashes = f->count / 3;  // (a ring for every third drop)
+        f->shape[0] = storm ? 2.6f : 2.2f, f->shape[1] = 1.9f, f->shape[2] = storm ? 36 : 30;
+        f->box[3] = storm ? 8 : 3;
+        f->cam[3] = 0.35f;
         f->color[0] = 0.80f, f->color[1] = 0.85f, f->color[2] = 0.95f, f->color[3] = storm ? 0.34f : 0.28f;
         f->fill[3] = storm ? 0.84f : 0.93f;  // (overcast)
         if (storm) {
