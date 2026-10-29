@@ -3093,6 +3093,269 @@ static NvnTexture *wx_depth;  // the frame's scene depth (the latest scene-camer
 static uint64_t wx_depth_frame = ~0ull;
 static float wx_zn, wx_zf = 1;  // (its depth range: the viewport's)
 static bool wx_dm1;  // (its depth mode: -1..1)
+// ------------------------------------------------------------------ snow on the ground (runtime/nvn/weather.h)
+// The overworld's scene pass draws its opaque things first - the level's model (vertex constant slot 4 of 912 / 928
+// bytes, one instance), the characters (Link, enemies, NPCs, animals: slot 4 of 1056 / 1072 bytes), grass tufts
+// (instanced), and the neighbouring rooms' models after them - then the blended things: blob shadows, water,
+// effects. Its depth comes from a depth-only pre-pass of most of the opaque draws (not Link's), which uses stencil bit
+// 0 (and only that): while there is snow every opaque draw, in the pre-pass and in the colour pass, also writes bit
+// 7 where it passes - clear for the level's model, set for anything else and for the water (part of the level's
+// model, told by its maps) - so each pixel ends up telling whether what shows there takes snow. The cover goes on in
+// a pass of its own on the scene's colour target right before the first blended draw: from the scene depth, its
+// stencil (bit 7: left alone) and the camera (vertex constant slot 1, 1024 bytes: the view-projection first). One full-screen triangle (reading
+// the colour under it: Apple GPUs' framebuffer fetch); the footprints come from a world-anchored trail map (1024 x
+// 1024 texels over 32 x 32 units, wrapping; each texel the time a print was made there, its height and its 32-unit
+// cell), stamped first (a quad per new print).
+static const char *sc_src =
+    "#include <metal_stdlib>\n"
+    "using namespace metal;\n"
+    "struct SF { float4 vp[4]; float4 ivp[4]; float4 screen, flags, zr, trail, tone; };\n"
+    "struct SP { float4 a; float4 b; };\n"  // (SnowPrint: x y z t, ang side len wid)
+    "static float3 world_at(constant SF &w, float2 uv, float d) {\n"  // the world point of the scene depth d at uv
+    "  float2 m = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);\n"
+    "  if (w.flags.x > 0.5) m.y = -m.y;\n"
+    "  float z = (d - w.zr.x) / w.zr.y;\n"
+    "  if (w.flags.y > 0.5) z = z * 2.0 - 1.0;\n"
+    "  float4 q = float4(m, z, 1.0);\n"
+    "  float4 wp = float4(dot(w.ivp[0], q), dot(w.ivp[1], q), dot(w.ivp[2], q), dot(w.ivp[3], q));\n"
+    "  return wp.xyz / wp.w;\n"
+    "}\n"
+    "static float hash2(float2 p) { return fract(sin(dot(p, float2(127.1, 311.7))) * 43758.5453); }\n"
+    "static float vnoise(float2 p) {\n"
+    "  float2 i = floor(p), f = fract(p), u = f * f * (3.0 - 2.0 * f);\n"
+    "  return mix(mix(hash2(i), hash2(i + float2(1.0, 0.0)), u.x), mix(hash2(i + float2(0.0, 1.0)), hash2(i + float2(1.0, 1.0)), u.x), u.y);\n"
+    "}\n"
+    // a new footprint into the trail map: 4 copies of its quad (the map wraps: a print over its edge goes on at the
+    // far side too); its shape a sole and a heel
+    "struct TO { float4 pos [[position]]; float2 u; float3 wp; float t; };\n"
+    "vertex TO sc_stamp_vs(uint vid [[vertex_id]], uint iid [[instance_id]], constant SF &w [[buffer(0)]],\n"
+    "                      constant SP *pr [[buffer(1)]]) {\n"
+    "  SP s = pr[iid >> 2u];\n"
+    "  uint c = iid & 3u;\n"
+    "  float2 corner = float2((vid & 1u) ? 1.0 : -1.0, (vid & 2u) ? 1.0 : -1.0) * 1.2;\n"
+    "  float2 fwd = float2(sin(s.b.x), cos(s.b.x)), rt = float2(fwd.y, -fwd.x);\n"
+    "  float2 wxz = s.a.xz + corner.x * rt * s.b.w * 0.5 + corner.y * fwd * s.b.z * 0.5;\n"
+    "  float N = w.zr.w, P = w.zr.z;\n"
+    "  float2 ctr = (s.a.xz / P - floor(s.a.xz / P)) * N;\n"
+    "  float2 sh = float2((c & 1u) ? (ctr.x > 0.5 * N ? -N : N) : 0.0, (c & 2u) ? (ctr.y > 0.5 * N ? -N : N) : 0.0);\n"
+    "  float2 tx = (wxz / P - floor(s.a.xz / P)) * N + sh;\n"
+    "  TO o;\n"
+    "  o.pos = float4(tx.x / N * 2.0 - 1.0, 1.0 - tx.y / N * 2.0, 0.0, 1.0);\n"
+    "  o.u = corner; o.wp = float3(wxz.x, s.a.y, wxz.y); o.t = s.a.w;\n"
+    "  return o;\n"
+    "}\n"
+    "fragment float4 sc_stamp_fs(TO in [[stage_in]], constant SF &w [[buffer(0)]]) {\n"
+    "  float2 a = (in.u - float2(0.0, 0.3)) / float2(0.95, 0.7), b = (in.u - float2(0.0, -0.6)) / float2(0.75, 0.42);\n"
+    "  if (dot(a, a) > 1.0 && dot(b, b) > 1.0) discard_fragment();\n"
+    "  return float4(in.t, in.wp.y, floor(in.wp.xz / w.zr.z));\n"
+    "}\n"
+    "struct VO { float4 pos [[position]]; };\n"
+    "vertex VO sc_vs(uint vid [[vertex_id]]) {\n"
+    "  VO o; o.pos = float4(vid == 1u ? 3.0 : -1.0, vid == 2u ? 3.0 : -1.0, 0.0, 1.0); return o;\n"
+    "}\n"
+    // how fresh a footprint is at world point p (1 just made .. 0 filled in again / none): the trail map's 4 texels
+    // around it (bilinear), each counted only if made at that height in p's own cell
+    "static float sc_print(constant SF &w, texture2d<float> tr, float3 p) {\n"
+    "  float N = w.zr.w, P = w.zr.z;\n"
+    "  float2 a = p.xz / P * N - 0.5, i0 = floor(a), f = a - i0;\n"
+    "  float s = 0.0;\n"
+    "  for (int k = 0; k < 4; k++) {\n"
+    "    float2 A = i0 + float2(float(k & 1), float(k >> 1));\n"
+    "    float2 cell = floor(A / N), t = A - cell * N;\n"
+    "    float4 v = tr.read(uint2(t));\n"
+    "    float wt = ((k & 1) ? f.x : 1.0 - f.x) * ((k >> 1) ? f.y : 1.0 - f.y);\n"
+    "    if (v.x > 0.0 && all(v.zw == cell) && abs(v.y - p.y) < 0.6) s += wt * exp(-max(w.flags.w - v.x, 0.0) / w.trail.x);\n"
+    "  }\n"
+    "  return s;\n"
+    "}\n"
+    "fragment half4 sc_fs(VO in [[stage_in]], constant SF &w [[buffer(0)]], depth2d<float> dt [[texture(0)]],\n"
+    "                     texture2d<float> tr [[texture(1)]], texture2d<uint> sv [[texture(2)]], half4 dst [[color(0)]]) {\n"
+    "  float2 uv = in.pos.xy / w.screen.xy;\n"
+    "  int2 mx = int2(w.screen.zw) - 1;\n"
+    "  int2 q = clamp(int2(uv * w.screen.zw), int2(0), mx);\n"
+    "  uint4 sm = sv.read(uint2(q));\n"
+    "  if (w.trail.y > 1.5) return half4((sm.r & 0x80u) ? 1.0h : 0.0h, (sm.r & 1u) ? 1.0h : 0.0h, 0.0h, 1.0h);\n"  // (test)
+    "  if (sm.r & 0x80u) return dst;\n"  // (a character: no snow on it)
+    "  float d = dt.read(uint2(q));\n"
+    "  if (d >= 0.99999) return dst;\n"
+    "  float2 e = 1.0 / w.screen.zw;\n"
+    "  float3 p = world_at(w, uv, d);\n"
+    // the surface's normal from the depth beside it (on each axis the nearer neighbour: no normals across edges)
+    "  float dl = dt.read(uint2(clamp(q - int2(1, 0), int2(0), mx))), dr = dt.read(uint2(clamp(q + int2(1, 0), int2(0), mx)));\n"
+    "  float du = dt.read(uint2(clamp(q - int2(0, 1), int2(0), mx))), dd = dt.read(uint2(clamp(q + int2(0, 1), int2(0), mx)));\n"
+    "  float3 a = abs(dr - d) < abs(dl - d) ? world_at(w, uv + float2(e.x, 0.0), dr) - p : p - world_at(w, uv - float2(e.x, 0.0), dl);\n"
+    "  float3 b = abs(dd - d) < abs(du - d) ? world_at(w, uv + float2(0.0, e.y), dd) - p : p - world_at(w, uv - float2(0.0, e.y), du);\n"
+    "  float3 n = normalize(cross(b, a));\n"
+    "  float4 cq = float4(w.ivp[0].z * -1.0 + w.ivp[0].w, w.ivp[1].z * -1.0 + w.ivp[1].w, w.ivp[2].z * -1.0 + w.ivp[2].w, w.ivp[3].z * -1.0 + w.ivp[3].w);\n"
+    "  if (dot(n, cq.xyz / cq.w - p) < 0.0) n = -n;\n"  // (facing the camera)
+    "  float up = smoothstep(0.45, 0.8, n.y);\n"
+    // patchy at first (where the noise is low), then everywhere; thin at first, then thick
+    "  float cover = w.flags.z;\n"
+    "  float2 pr = float2(p.x * 0.8 + p.z * 0.6, p.z * 0.8 - p.x * 0.6);\n"  // (turned: no grid-aligned patches)
+    "  float nz = vnoise(pr * 0.4) * 0.6 + vnoise(pr * 1.3) * 0.28 + vnoise(pr * 4.1) * 0.12;\n"
+    "  float patch = smoothstep(0.0, 1.0, saturate((cover * 1.45 - nz) / 0.22));\n"
+    "  float dust = 0.35 * smoothstep(0.0, 0.4, cover) * (0.5 + 0.5 * vnoise(pr * 7.0));\n"  // (a light dusting first)
+    "  float k = up * max(patch * (0.45 + 0.55 * smoothstep(0.0, 0.85, cover)), dust);\n"
+    "  if (k <= 0.0) return dst;\n"
+    "  float fp = sc_print(w, tr, p);\n"
+    "  if (w.trail.y > 0.5) return half4(mix(dst, half4(1.0, 0.0, 0.0, 1.0), half(k)));\n"
+    "  k *= 1.0 - saturate(fp) * (0.9 - 0.45 * cover);\n"  // (a dent in deep snow, the ground through a thin layer)
+    // the snow's light: the picture's own (its shadows stay), the slope, a faint grain
+    "  float3 c = float3(dst.rgb);\n"
+    "  float lit = saturate(max(c.r, max(c.g, c.b)) / w.tone.w);\n"
+    "  float3 col = w.tone.rgb * (0.4 + 0.6 * lit) * (0.85 + 0.15 * n.y) * (0.96 + 0.06 * hash2(floor(p.xz * 40.0)));\n"
+    "  col *= float3(1.0 - 0.5 * saturate(fp), 1.0 - 0.42 * saturate(fp), 1.0 - 0.28 * saturate(fp));\n"  // (its shade: blue-grey)
+    "  return half4(half3(mix(c, col, k)), dst.a);\n"
+    "}\n";
+
+static NvnTexture *sc_color, *sc_depth;  // the scene pass's targets this frame (while its opaque things are drawn)
+static float sc_vp[16], sc_zn, sc_zf;
+static bool sc_dm1;
+static int sc_mark;  // this draw: 0 as the game has it, 1 the level's model (stencil bit 7 clear), 2 anything else (set)
+static uint64_t sc_frame = ~0ull, sc_done = ~0ull;
+static uint32_t wx_scene_w, wx_scene_h;  // (the scene image the composite read: the scene pass's target size)
+
+static void snow_cover_encode(void) {
+    static long off = -1;  // (LARECOMP_SNOW_SKIP=1: the cover not drawn. Its GPU cost: ~0.2 ms at 1920x1080 on an M3
+    // Max, offline bench; a command buffer of its own mid-scene, as the weather's LARECOMP_WEATHER_TIME does, measures
+    // the scene's queued work too)
+    if (off < 0) off = getenv("LARECOMP_SNOW_SKIP") ? atol(getenv("LARECOMP_SNOW_SKIP")) : 0;
+    SnowFrame sf;
+    memset(&sf, 0, sizeof sf);
+    if (off || !sc_color || !sc_depth || fabsf(sc_zf - sc_zn) < 1e-6f || !weather_snow_cover(&sf, sc_vp)) return;
+    float sx, sy, dsx, dsy;
+    renderer_texture_scale(sc_color, &sx, &sy);
+    renderer_texture_scale(sc_depth, &dsx, &dsy);
+    id<MTLTexture> ct = renderer_texture(sc_color, nil, true), dt = renderer_texture(sc_depth, nil, true);
+    static int nlog;  // LARECOMP_LOG_SNOW: why the cover isn't drawn (first few)
+    if ((!ct || !dt || dt.pixelFormat != MTLPixelFormatDepth32Float_Stencil8) && nlog++ < 5 && getenv("LARECOMP_LOG_SNOW"))
+        LOG("[snow] no cover: colour %p depth %p format %lu\n", (__bridge void *)ct, (__bridge void *)dt, (unsigned long)dt.pixelFormat);
+    if (!ct || !dt || dt.pixelFormat != MTLPixelFormatDepth32Float_Stencil8) return;
+    static __unsafe_unretained id<MTLTexture> sv_of;  // (its stencil, read as a texture: a view)
+    static id<MTLTexture> sv;
+    if (sv_of != dt) sv = [dt newTextureViewWithPixelFormat:MTLPixelFormatX32_Stencil8], sv_of = dt;
+    if (!sv && nlog++ < 5 && getenv("LARECOMP_LOG_SNOW")) LOG("[snow] no stencil view (usage %#lx)\n", (unsigned long)dt.usage);
+    if (!sv) return;
+    int cw = (int)lroundf(sc_color->width * sx), ch = (int)lroundf(sc_color->height * sy);
+    if (cw > (int)ct.width) cw = (int)ct.width;
+    if (ch > (int)ct.height) ch = (int)ct.height;
+    sf.screen[0] = (float)cw, sf.screen[1] = (float)ch;
+    sf.screen[2] = fminf((float)lroundf(sc_depth->width * dsx), (float)dt.width);
+    sf.screen[3] = fminf((float)lroundf(sc_depth->height * dsy), (float)dt.height);
+    sf.flags[0] = nvn_window_origin() == 0, sf.flags[1] = sc_dm1;
+    sf.zr[0] = sc_zn, sf.zr[1] = sc_zf - sc_zn;
+
+    static id<MTLLibrary> lib;
+    static id<MTLRenderPipelineState> cover, stamp;
+    static MTLPixelFormat cover_fmt;
+    static id<MTLTexture> trail;
+    if (!lib) {
+        NSError *err = nil;
+        lib = TIMED_COMPILE([dev newLibraryWithSource:@(sc_src) options:nil error:&err]);
+        if (!lib) { LOG("[snow] shaders: %s\n", err.localizedDescription.UTF8String); off = 1; return; }
+        MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
+        pd.vertexFunction = [lib newFunctionWithName:@"sc_stamp_vs"];
+        pd.fragmentFunction = [lib newFunctionWithName:@"sc_stamp_fs"];
+        pd.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA32Float;
+        stamp = TIMED_COMPILE([dev newRenderPipelineStateWithDescriptor:pd error:&err]);
+        MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float
+                                                                                      width:1024 height:1024 mipmapped:NO];
+        td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+        td.storageMode = MTLStorageModePrivate;
+        trail = [dev newTextureWithDescriptor:td];
+        if (!stamp || !trail) { LOG("[snow] trail map: %s\n", err.localizedDescription.UTF8String); off = 1; return; }
+    }
+    if (cover_fmt != ct.pixelFormat) {
+        cover_fmt = ct.pixelFormat;
+        MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
+        pd.vertexFunction = [lib newFunctionWithName:@"sc_vs"];
+        pd.fragmentFunction = [lib newFunctionWithName:@"sc_fs"];
+        pd.colorAttachments[0].pixelFormat = ct.pixelFormat;
+        NSError *err = nil;
+        cover = TIMED_COMPILE([dev newRenderPipelineStateWithDescriptor:pd error:&err]);
+        if (!cover) { LOG("[snow] cover pipeline: %s\n", err.localizedDescription.UTF8String); off = 1; return; }
+    }
+    end_pass();
+    st.rt_dirty = true;  // (the game's next draw opens its pass again: loads what this left)
+    // new footprints into the trail map (cleared the first time)
+    static bool trail_clear = true;
+    SnowPrint pr[64];
+    int np = weather_snow_prints(pr, 64);
+    if (np || trail_clear) {
+        MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+        rp.colorAttachments[0].texture = trail;
+        rp.colorAttachments[0].loadAction = trail_clear ? MTLLoadActionClear : MTLLoadActionLoad;
+        rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0);
+        rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+        trail_clear = false;
+        id<MTLRenderCommandEncoder> e = [cb() renderCommandEncoderWithDescriptor:rp];
+        e.label = @"snow prints";
+        if (np) {
+            [e setRenderPipelineState:stamp];
+            [e setVertexBytes:&sf length:sizeof sf atIndex:0];
+            [e setFragmentBytes:&sf length:sizeof sf atIndex:0];
+            [e setVertexBytes:pr length:np * sizeof pr[0] atIndex:1];
+            [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4 instanceCount:np * 4];
+        }
+        [e endEncoding];
+        stat_passes++;
+    }
+    MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+    rp.colorAttachments[0].texture = ct;
+    rp.colorAttachments[0].loadAction = MTLLoadActionLoad;
+    rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+    rp.renderTargetWidth = (NSUInteger)cw, rp.renderTargetHeight = (NSUInteger)ch;
+    id<MTLRenderCommandEncoder> e = [cb() renderCommandEncoderWithDescriptor:rp];
+    e.label = @"snow cover";
+    [e setViewport:(MTLViewport){0, 0, (double)cw, (double)ch, 0, 1}];
+    [e setRenderPipelineState:cover];
+    [e setFragmentBytes:&sf length:sizeof sf atIndex:0];
+    [e setFragmentTexture:dt atIndex:0];
+    [e setFragmentTexture:trail atIndex:1];
+    [e setFragmentTexture:sv atIndex:2];
+    [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [e endEncoding];
+    stat_passes++;
+    snapshots_invalidate(sc_color);
+}
+
+// Before each draw: while there is snow, the scene's opaque draws (depth pre-pass and colour pass) write stencil bit 7
+// (sc_mark); the cover goes on right before the colour pass's first blended draw (or the next pass, if none)
+static void snow_cover_check(CmdRec *r, bool indexed, Prog *pr) {
+    sc_mark = 0;
+    uint64_t frame = renderer_exec_frame();
+    if (sc_done == frame || !st.rt.depth) return;
+    bool scene = st.rt.ncolor && st.rt.color[0] && st.rt.color[0]->width == wx_scene_w &&
+                 st.rt.color[0]->height == wx_scene_h && st.rt.depth->format == 0x35;
+    bool blended = st.rt.ncolor && (st.color_state[0] & 1);
+    if (sc_frame == frame && (!scene || st.rt.color[0] != sc_color || blended || !st.ds[0])) {
+        static int nlog;
+        if (nlog++ < 5 && getenv("LARECOMP_LOG_SNOW"))
+            LOG("[snow] cover at frame %llu (scene %d, blended %d, depth test %d)\n", (unsigned long long)frame, scene, blended, st.ds[0]);
+        sc_done = frame;
+        snow_cover_encode();
+        return;
+    }
+    if (!weather_snow_on()) return;
+    uint64_t s4 = st.ubuf[0][4].addr ? st.ubuf[0][4].size : 0, inst = indexed ? r->x[6] : r->x[4];
+    bool level = (s4 == 912 || s4 == 928) && inst <= 1 && st.ubuf[0][1].addr && st.ubuf[0][1].size == 1024;
+    if (level && st.rt.ncolor) {  // (the water is part of the level's model: told by its maps, recolour_water.c)
+        extern int renderer_texpatch_of(NvnTexture *t);
+        for (int i = 0; i < pr->fi->ntex && level; i++) {
+            NvnTexture *t = shader_texture_object(1, &pr->fi->tex[i]);
+            if (t && recolour_class_of(renderer_texpatch_of(t)) == 32) level = false;
+        }
+    }
+    // the depth pre-pass and the colour pass' opaque draws (Link and the water are only in that one)
+    if (st.ds[0] && (st.ds[1] || (st.rt.ncolor && !blended)) && st.rt.depth->width == wx_scene_w &&
+        st.rt.depth->height == wx_scene_h && st.rt.depth->format == 0x35)
+        sc_mark = level ? 1 : 2;
+    if (!scene || !level || blended || !st.ds[0]) return;
+    sc_color = st.rt.color[0], sc_depth = st.rt.depth, sc_frame = frame;
+    memcpy(sc_vp, (const float *)(uintptr_t)st.ubuf[0][1].addr, sizeof sc_vp);
+    sc_zn = st.depth_range[0][0], sc_zf = st.depth_range[0][1], sc_dm1 = nvn_depth_mode() == 0;
+}
+
 static void draw_one(CmdRec *r, bool indexed) {
     if (!st.program) { stat_skipped++; return; }
     static bool logged_modes;
@@ -3120,6 +3383,7 @@ static void draw_one(CmdRec *r, bool indexed) {
             st.viewport[0][2] >= st.rt.color[0]->width && st.viewport[0][3] >= st.rt.color[0]->height && pr->fi->ntex) {
             NvnTexture *t0 = shader_texture_object(1, &pr->fi->tex[0]);
             composite = t0 && mirror_scene_size(t0->width, t0->height, st.rt.color[0]->width, st.rt.color[0]->height);
+            if (composite) wx_scene_w = t0->width, wx_scene_h = t0->height;  // (the snow cover: the scene pass's size)
             extern void scene_size_log(bool composite, uint32_t sw, uint32_t sh, uint32_t w, uint32_t h);
             if (t0) scene_size_log(composite, t0->width, t0->height, st.rt.color[0]->width, st.rt.color[0]->height);
         }
@@ -3193,6 +3457,7 @@ static void draw_one(CmdRec *r, bool indexed) {
     if (td_pending) { td_flush_shader_textures(0, pr->vi); td_flush_shader_textures(1, pr->fi); }
     resolve_feedback(pr);
     // this draw's writes make snapshots of its attachments stale
+    snow_cover_check(r, indexed, pr);  // (the snow on the ground: its stencil marks, the cover after the opaque draws)
     snap_reason = "draw-depthwrite";
     if (st.rt.depth && st.ds[0] && st.ds[1]) snapshots_invalidate(st.rt.depth);  // stencil-only writes: shaders sample depth
     snap_reason = "draw-colorwrite";
@@ -3293,13 +3558,14 @@ static void draw_one(CmdRec *r, bool indexed) {
     // depth / stencil
     static uint64_t last_dsk;
     static id<MTLDepthStencilState> last_dss;
-    uint64_t dsk = hmix(hmix(hmix(0xcbf29ce484222325ull, st.ds, 8), st.stencil_mask, sizeof st.stencil_mask), st.stencil_vmask, sizeof st.stencil_vmask) ^ decal_le;
+    uint64_t dsk = hmix(hmix(hmix(0xcbf29ce484222325ull, st.ds, 8), st.stencil_mask, sizeof st.stencil_mask), st.stencil_vmask, sizeof st.stencil_vmask) ^ decal_le ^
+                   (uint64_t)(sc_mark != 0) << 40;  // (snow: the stencil marks, snow_cover_check)
     id<MTLDepthStencilState> dss = dsk == last_dsk ? last_dss : nil;
     NSString *dk = nil;
     if (!dss) {
-        dk = [NSString stringWithFormat:@"ds %02x%02x%02x%02x%02x%02x%02x%02x %x %x %x %x%s", st.ds[0], st.ds[1], st.ds[2], st.ds[3],
+        dk = [NSString stringWithFormat:@"ds %02x%02x%02x%02x%02x%02x%02x%02x %x %x %x %x%s%s", st.ds[0], st.ds[1], st.ds[2], st.ds[3],
                     st.ds[4], st.ds[5], st.ds[6], st.ds[7], st.stencil_mask[0], st.stencil_vmask[0], st.stencil_mask[1], st.stencil_vmask[1],
-                    decal_le ? " le" : ""];
+                    decal_le ? " le" : "", sc_mark ? " snow" : ""];
         dss = cache[dk];
     }
     if (!dss) {
@@ -3311,17 +3577,27 @@ static void draw_one(CmdRec *r, bool indexed) {
             dd.depthWriteEnabled = st.ds[1] != 0;
         }
         else { dd.depthCompareFunction = MTLCompareFunctionAlways; dd.depthWriteEnabled = NO; }
-        if (st.ds[3]) {
+        if (st.ds[3] || sc_mark) {
             uint32_t ops = st.ds[5] | st.ds[6] << 8 | st.ds[7] << 16;
             for (int f = 0; f < 2; f++) {
                 MTLStencilDescriptor *sd = [MTLStencilDescriptor new];
-                sd.stencilCompareFunction = compare_fn(f ? st.ds[4] >> 4 : st.ds[4] & 0xF);
-                uint32_t o = f ? ops >> 12 : ops;
-                sd.stencilFailureOperation = stencil_op(o & 0xF);
-                sd.depthFailureOperation = stencil_op((o >> 4) & 0xF);
-                sd.depthStencilPassOperation = stencil_op((o >> 8) & 0xF);
-                sd.readMask = st.stencil_vmask[f] & 0xFF;
-                sd.writeMask = st.stencil_mask[f] & 0xFF;
+                if (st.ds[3]) {
+                    sd.stencilCompareFunction = compare_fn(f ? st.ds[4] >> 4 : st.ds[4] & 0xF);
+                    uint32_t o = f ? ops >> 12 : ops;
+                    sd.stencilFailureOperation = stencil_op(o & 0xF);
+                    sd.depthFailureOperation = stencil_op((o >> 4) & 0xF);
+                    sd.depthStencilPassOperation = stencil_op((o >> 8) & 0xF);
+                    sd.readMask = st.stencil_vmask[f] & 0xFF;
+                    sd.writeMask = st.stencil_mask[f] & 0xFF;
+                } else sd.writeMask = 0;
+                if (sc_mark) {  // (snow: bit 7 too where it passes - the game's keep / zero / replace become a replace,
+                    // the reference keeps the game's bits: snow_cover_check)
+                    MTLStencilOperation p = sd.depthStencilPassOperation;
+                    if (p == MTLStencilOperationKeep) sd.writeMask = 0x80;
+                    else if (p == MTLStencilOperationZero || p == MTLStencilOperationReplace) sd.writeMask |= 0x80;
+                    if (p == MTLStencilOperationKeep || p == MTLStencilOperationZero || p == MTLStencilOperationReplace)
+                        sd.depthStencilPassOperation = MTLStencilOperationReplace;
+                }
                 if (f) dd.backFaceStencil = sd; else dd.frontFaceStencil = sd;
             }
         }
@@ -3331,7 +3607,12 @@ static void draw_one(CmdRec *r, bool indexed) {
     [enc setDepthStencilState:dss];
     last_dsk = dsk;
     last_dss = dss;
-    [enc setStencilFrontReferenceValue:st.stencil_ref[0] backReferenceValue:st.stencil_ref[1]];
+    if (sc_mark) {  // (the game's reference where its pass op was a replace, 0 for a zero; bit 7 the mark)
+        uint32_t ops = st.ds[5] | st.ds[6] << 8 | st.ds[7] << 16, ref[2];
+        for (int f = 0; f < 2; f++)
+            ref[f] = (st.ds[3] && ((f ? ops >> 20 : ops >> 8) & 0xF) == 3 ? st.stencil_ref[f] & 0x7F : 0) | (sc_mark == 2 ? 0x80 : 0);
+        [enc setStencilFrontReferenceValue:ref[0] backReferenceValue:ref[1]];
+    } else [enc setStencilFrontReferenceValue:st.stencil_ref[0] backReferenceValue:st.stencil_ref[1]];
     [enc setBlendColorRed:st.blend_color[0] green:st.blend_color[1] blue:st.blend_color[2] alpha:st.blend_color[3]];
 
     // rasterizer
@@ -3855,6 +4136,32 @@ static const char *wx_src =
     "  float ring = smoothstep(0.45, 0.75, r) * (1.0 - smoothstep(0.8, 1.0, r));\n"
     "  return float4(w.color.rgb, in.a * ring);\n"
     "}\n"
+    // snow Link kicked up (weather_snow_puffs): pf[0].p.x the time now, then the ring - each flies off his feet,
+    // falls back and fades
+    "struct PF { float4 p; float4 v; };\n"
+    "vertex VO wx_puff_vs(uint vid [[vertex_id]], uint iid [[instance_id]], constant WF &w [[buffer(0)]],\n"
+    "                     constant PF *pf [[buffer(2)]]) {\n"
+    "  VO o;\n"
+    "  PF q = pf[iid + 1u];\n"
+    "  float age = pf[0].p.x - q.p.w, life = 0.8;\n"
+    "  o.uv = float2(0.0); o.a = 0.0;\n"
+    "  if (q.p.w <= 0.0 || age < 0.0 || age > life) { o.pos = float4(0.0, 0.0, -2.0, 1.0); return o; }\n"
+    "  float3 p = q.p.xyz + q.v.xyz * age + float3(0.0, -2.0, 0.0) * age * age;\n"
+    "  p.y = max(p.y, q.p.y - 0.05);\n"
+    "  p += normalize(w.cam.xyz - p) * 0.3;\n"  // (as a lying flake: the ground's depth doesn't hide it)
+    "  float2 corner = float2((vid & 1u) ? 1.0 : -1.0, (vid & 2u) ? 1.0 : -1.0);\n"
+    "  float4 c = clip_of(w, p);\n"
+    "  float size = q.v.w * (0.7 + 0.8 * age / life) * w.screen.y / 1080.0;\n"
+    "  c.xy += corner * size / w.screen.xy * c.w;\n"
+    "  o.pos = c; o.uv = corner; o.a = 0.9 * (1.0 - age / life);\n"
+    "  return o;\n"
+    "}\n"
+    "fragment float4 wx_puff_fs(VO in [[stage_in]], constant WF &w [[buffer(0)]], depth2d<float> dt [[texture(0)]]) {\n"
+    "  if (wx_hidden(w, dt, in.pos)) discard_fragment();\n"
+    "  float r = length(in.uv);\n"  // (a soft ball: shaded blue-grey at its edge, so it shows against the snow)
+    "  float3 c = mix(float3(0.62, 0.68, 0.8), w.color.rgb, saturate(1.2 - r * r));\n"
+    "  return float4(c, in.a * (1.0 - smoothstep(0.55, 1.0, r)));\n"
+    "}\n"
     // the fill: out = rgb + picture * a (overcast, lightning)
     "vertex float4 wx_fill_vs(uint vid [[vertex_id]]) {\n"
     "  return float4(vid == 1u ? 3.0 : -1.0, vid == 2u ? 3.0 : -1.0, 0.0, 1.0);\n"
@@ -3901,7 +4208,7 @@ static void weather_encode(void) {
 
     // pipelines: by the window image's format
     static id<MTLLibrary> lib;
-    static id<MTLRenderPipelineState> pipe[3];  // particles, splashes, fill
+    static id<MTLRenderPipelineState> pipe[4];  // particles, splashes, fill, kicked-up snow
     static MTLPixelFormat pipe_fmt;
     id<MTLTexture> ct = view_texture(win, &st.rt.cview[0], st.rt.has_cview[0], true, nil);
     if (!ct) return;
@@ -3912,8 +4219,9 @@ static void weather_encode(void) {
     }
     if (pipe_fmt != ct.pixelFormat) {
         pipe_fmt = ct.pixelFormat;
-        static const char *const fn[3][2] = {{"wx_vs", "wx_fs"}, {"wx_splash_vs", "wx_splash_fs"}, {"wx_fill_vs", "wx_fill_fs"}};
-        for (int i = 0; i < 3; i++) {
+        static const char *const fn[4][2] = {{"wx_vs", "wx_fs"}, {"wx_splash_vs", "wx_splash_fs"}, {"wx_fill_vs", "wx_fill_fs"},
+                                             {"wx_puff_vs", "wx_puff_fs"}};
+        for (int i = 0; i < 4; i++) {
             MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
             pd.vertexFunction = [lib newFunctionWithName:@(fn[i][0])];
             pd.fragmentFunction = [lib newFunctionWithName:@(fn[i][1])];
@@ -3959,6 +4267,15 @@ static void weather_encode(void) {
     if (wf.splashes) {
         [e setRenderPipelineState:pipe[1]];
         [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4 instanceCount:wf.splashes];
+    }
+    if (wf.kind == WEATHER_SNOW && !dbg) {  // (the snow Link kicked up)
+        SnowPuff pf[SNOW_PUFFS + 1];
+        weather_snow_puffs(pf + 1);
+        memset(&pf[0], 0, sizeof pf[0]);
+        pf[0].p[0] = weather_snow_now();
+        [e setRenderPipelineState:pipe[3]];
+        [e setVertexBytes:pf length:sizeof pf atIndex:2];
+        [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4 instanceCount:SNOW_PUFFS];
     }
     [e endEncoding];
     stat_passes++;

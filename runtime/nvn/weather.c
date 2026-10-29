@@ -2,6 +2,7 @@
 #include "weather.h"
 
 #include <math.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -158,9 +159,140 @@ bool weather_probe_world(const WeatherFrame *f, int i, float d, float out[3]) {
     return true;
 }
 
+// ---- snow on the ground (weather.h): the cover, Link's footprints and the snow he kicks up
+static double t = 0;   // the weather's time (s): counted only while it shows (weather_frame)
+static float g_cover;  // how much snow lies (0..1)
+static float env_f(const char *name, float def) { const char *e = getenv(name); return e ? (float)atof(e) : def; }
+
+static pthread_mutex_t g_link_lock = PTHREAD_MUTEX_INITIALIZER;
+static float g_link[3];       // Link's position as the game thread read it last (PlayerCollision +0x80: his feet)
+static double g_link_at;      // (host time then)
+static uint64_t g_link_n;     // (samples so far)
+
+static double host_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec + ts.tv_nsec * 1e-9;
+}
+
+static bool level_is_field(void);
+void weather_player_tick(uint64_t frame) {
+    if (!g_outdoors || weather_current() != WEATHER_SNOW || !level_is_field()) return;
+    extern uint64_t doorjump_player(uint64_t frame);  // runtime/hle/doorjump.c (the PlayerCollision component)
+    uint64_t pc = doorjump_player(frame);
+    if (!pc) return;
+    const float *p = (const float *)(uintptr_t)(pc + 0x80);
+    pthread_mutex_lock(&g_link_lock);
+    memcpy(g_link, p, sizeof g_link);
+    g_link_at = host_now();
+    g_link_n++;
+    pthread_mutex_unlock(&g_link_lock);
+}
+
+static SnowPrint g_prints[64];  // made, not stamped yet (weather_snow_prints)
+static int g_nprints;
+static SnowPuff g_puffs[SNOW_PUFFS];  // a ring
+static int g_puff_next;
+static float frand(void);
+
+static void puff(const float at[3], float dx, float dz, bool dash) {
+    SnowPuff *q = &g_puffs[g_puff_next++ % SNOW_PUFFS];
+    float a = frand() * 6.2832f, r = frand() * (dash ? 0.25f : 0.15f);
+    q->p[0] = at[0] + cosf(a) * r, q->p[1] = at[1] + 0.05f, q->p[2] = at[2] + sinf(a) * r, q->p[3] = (float)t;
+    float back = dash ? 1.2f + frand() * 1.6f : 0.3f + frand() * 0.6f, side = (frand() - 0.5f) * (dash ? 2.0f : 1.0f);
+    q->v[0] = -dx * back - dz * side, q->v[2] = -dz * back + dx * side;  // (behind him, spread sideways)
+    q->v[1] = dash ? 1.4f + frand() * 1.6f : 0.7f + frand() * 0.8f;
+    q->v[3] = dash ? 9 + frand() * 7 : 6 + frand() * 4;
+}
+
+// Footprints and kicked-up snow from Link's latest positions (render thread, once a frame while it shows)
+static void snow_link(void) {
+    static float lp[3], stride, spd;
+    static double lat, acc;
+    static uint64_t seen;
+    static int side = 1;
+    float p[3];
+    double at;
+    uint64_t n;
+    pthread_mutex_lock(&g_link_lock);
+    memcpy(p, g_link, sizeof p), at = g_link_at, n = g_link_n;
+    pthread_mutex_unlock(&g_link_lock);
+    if (n == seen) return;
+    double dt = at - lat;
+    float dx = p[0] - lp[0], dy = p[1] - lp[1], dz = p[2] - lp[2], d = sqrtf(dx * dx + dz * dz);
+    bool fresh = n != seen + 1 && (dt <= 0 || dt > 0.25);
+    seen = n;
+    memcpy(lp, p, sizeof lp), lat = at;
+    if (fresh || dt <= 0 || dt > 0.25 || d > 2) { stride = 0; return; }  // (first sample, a pause, a warp)
+    float v = d / (float)dt;
+    spd += (fminf(v, 14) - spd) * 0.1f;  // (the samples' host times jitter: walking reads 4.5 +- 3)
+    bool ground = fabsf(dy) / (float)dt < 0.8f;  // (not jumping / falling)
+    static float dash_v = -1;
+    if (dash_v < 0) dash_v = env_f("LARECOMP_SNOW_DASH", 6.5f);  // (world units / s: walking is 4.5, faster the boots)
+    bool dash = spd > dash_v;
+    static int logged;  // LARECOMP_LOG_SNOW: Link's speed (calibration)
+    if (getenv("LARECOMP_LOG_SNOW") && logged++ % 20 == 0)
+        LOG("[snow] link %.2f %.2f %.2f speed %.2f ground %d dash %d cover %.2f\n", p[0], p[1], p[2], spd, ground, dash, g_cover);
+    if (!ground || d < 1e-4f || g_cover < 0.05f) { stride = 0; return; }
+    float ux = dx / d, uz = dz / d;
+    // a print every half stride, left and right of his path, along his way
+    const float step = 0.5f, foot = 0.13f;
+    float s0 = stride;
+    stride += d;
+    for (float k = step - s0; stride >= step && g_nprints < 64; k += step) {
+        stride -= step;
+        side = -side;
+        float f = k / d;  // (where along this frame's move)
+        SnowPrint *q = &g_prints[g_nprints++];
+        q->x = p[0] - dx * (1 - f) - uz * foot * side, q->z = p[2] - dz * (1 - f) + ux * foot * side;
+        q->y = p[1], q->t = (float)t;
+        q->ang = atan2f(ux, uz), q->side = (float)side;
+        q->len = dash ? 0.42f : 0.36f, q->wid = 0.19f;
+    }
+    // kicked-up snow: a few puffs a second walking, a stream with the boots
+    if (g_cover < 0.15f || v < 0.6f) return;
+    acc += dt * (dash ? 80 : 16) * fminf(g_cover * 1.5f, 1.0f);
+    while (acc >= 1) acc -= 1, puff(p, ux, uz, dash);
+}
+
+int weather_snow_prints(SnowPrint *out, int max) {
+    int n = g_nprints < max ? g_nprints : max;
+    memcpy(out, g_prints, n * sizeof *out);
+    g_nprints = 0;
+    return n;
+}
+
+int weather_snow_puffs(SnowPuff out[SNOW_PUFFS]) {
+    memcpy(out, g_puffs, sizeof g_puffs);
+    return SNOW_PUFFS;
+}
+
+float weather_snow_now(void) { return (float)t; }
+bool weather_snow_on(void) { return g_outdoors && g_cover > 0.002f; }
+
+bool weather_snow_cover(SnowFrame *s, const float vp[16]) {
+    static int dbg = -1;  // LARECOMP_SNOW_DEBUG=1 (test): the cover's mask in flat red
+    if (dbg < 0) dbg = (int)env_f("LARECOMP_SNOW_DEBUG", 0);
+    if (!g_outdoors || g_cover <= 0.002f) return false;
+    memcpy(s->vp, vp, sizeof s->vp);
+    if (!mat_inverse(s->vp, s->inv_vp)) return false;
+    s->flags[2] = g_cover, s->flags[3] = (float)t;
+    s->zr[2] = 32, s->zr[3] = 1024;  // (the trail map: 1024 texels over 32 units, ~3 cm each, wrapping)
+    s->trail[0] = env_f("LARECOMP_SNOW_REFILL", 30), s->trail[1] = (float)dbg;
+    // (the scene's colours are linear and before the game's tone mapping: its sunlit white ground is ~1)
+    static float tone[4] = {-1};
+    if (tone[0] < 0) {
+        tone[0] = 0.84f, tone[1] = 0.87f, tone[2] = 0.93f, tone[3] = 0.8f;
+        const char *e = getenv("LARECOMP_SNOW_TONE");  // r,g,b,ref (test)
+        if (e) sscanf(e, "%f,%f,%f,%f", &tone[0], &tone[1], &tone[2], &tone[3]);
+    }
+    memcpy(s->tone, tone, sizeof tone);
+    return true;
+}
+
 bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PROBES]) {
     // host time, counted only while the overworld is on screen (a menu or a door stops it)
-    static double t = 0, last = 0;
+    static double last = 0;
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     double now = ts.tv_sec + ts.tv_nsec * 1e-9, dt = now - last;
@@ -173,8 +305,14 @@ bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PR
     }
     g_outdoors = field;
     int kind = weather_current();
+    if (field && dt > 0 && dt < 0.25) {  // the snow on the ground: builds while it snows, melts otherwise
+        static float build = -1;
+        if (build < 0) build = env_f("LARECOMP_SNOW_BUILD", 90), g_cover = env_f("LARECOMP_SNOW_COVER", 0);  // (test)
+        g_cover = kind == WEATHER_SNOW ? fminf(1, g_cover + (float)dt / build) : fmaxf(0, g_cover - (float)dt / 30);
+    }
     if (!field || kind == WEATHER_OFF || g_cam_frame != frame) return false;
     if (dt > 0 && dt < 0.25) t += dt;
+    if (kind == WEATHER_SNOW) snow_link();
 
     // (screen, flags, zr: filled by the renderer)
     memset(f->origin, 0, sizeof f->origin), memset(f->box, 0, sizeof f->box), memset(f->shape, 0, sizeof f->shape);

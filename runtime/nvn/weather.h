@@ -47,3 +47,34 @@ bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PR
 bool weather_probe_world(const WeatherFrame *f, int i, float d, float out[3]);
 // The weather in effect now (WEATHER_OFF/RAIN/SNOW/STORM): the setting, its random roll, or the seed's own
 int weather_current(void);
+
+// ---- snow on the ground (snow only; prototype). While it snows, surfaces facing up turn white over ~1.5 minutes
+// (patchy at first), it melts again in ~30 s once the weather is something else. Drawn by the renderer INSIDE the
+// game's scene: after the level's own model and before the characters, grass tufts, blob shadows and water (the
+// game draws them in that order), so whatever comes later stays clear of it. Link leaves footprints in it (a
+// world-anchored trail map the cover reads; they fill in again as it keeps snowing) and kicks up snow as he walks
+// (a burst with the Pegasus Boots).
+typedef struct {
+    float vp[16];      // the scene camera's view-projection (rows, the game's GL clip space)
+    float inv_vp[16];  // its inverse (rows)
+    float screen[4];   // the colour target's content size (w, h), the depth's content size (w, h)
+    float flags[4];    // x: flip y, y: depth -1..1, z: the cover (0..1), w: the time (s)
+    float zr[4];       // the scene depth's range (near, far - near), the trail map's period (world), its size (texels)
+    float trail[4];    // x: how long a print takes to fill in again (s), y: test view (1 the cover's mask in red)
+    float tone[4];     // the snow's colour in the scene's (linear, pre-tone-map) units (rgb), w: their reference white
+} SnowFrame;
+// The cover for this frame (false: none - not snowing / nothing settled / not the overworld). vp: the scene pass's
+// view-projection (rows). The renderer fills screen, flags.xy and zr.xy.
+bool weather_snow_cover(SnowFrame *s, const float vp[16]);
+bool weather_snow_on(void);  // (any snow lying now: the renderer marks its scene pass for the cover)
+// Footprints made since the last call (stamped into the trail map): world xyz, time stamped; the walking direction
+// (radians, around y) and the foot (-1 left, 1 right)
+typedef struct { float x, y, z, t; float ang, side, len, wid; } SnowPrint;
+int weather_snow_prints(SnowPrint *out, int max);
+// Snow kicked up at Link's feet: p xyz + birth time, v xyz + size (pixels at 1080p); `count` live slots in a ring
+enum { SNOW_PUFFS = 96 };
+typedef struct { float p[4]; float v[4]; } SnowPuff;
+int weather_snow_puffs(SnowPuff out[SNOW_PUFFS]);
+float weather_snow_now(void);  // (their time base: the weather's time)
+// Game thread, every frame: Link's position for the footprints and the kicked-up snow (snow on the overworld only)
+void weather_player_tick(uint64_t frame);
