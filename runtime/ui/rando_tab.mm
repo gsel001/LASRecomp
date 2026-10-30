@@ -147,6 +147,9 @@ struct GenOpts {
     bool key_rings = false;   // key-rings: each dungeon's small keys as one key ring (tools/rando/key_rings.py)
     bool hints = false;       // hints: owl statues and phone booths tell about the seed (tools/rando/seed_hints.py)
     bool rocks = false;       // rocks: every overworld rock hides an item (tools/rando/rocks.py)
+    // fast-egg: the Egg's first drop lands at the boss, no maze (tools/rando/fast_egg.py). On for new seeds; seed IDs
+    // made before it hold 0 = the maze, as they were
+    bool fast_egg = true;
 };
 static GenOpts g_opts;
 
@@ -196,7 +199,7 @@ static bool *opt_flags(GenOpts &o, int i) {  // the yes/no options, in ID order 
                  &o.pet_rooster, &o.pet_ghost, &o.pet_marin, &o.trendsanity, &o.boss_souls, &o.hookshot_any,
                  &o.digs, &o.miniboss_souls, &o.no_start_sword, &o.no_start_shield, &o.no_start_ocarina,
                  &o.tunic_upgrades, &o.shellsanity, &o.race, &o.random_cosmetics, &o.apples, &o.chest_looks,
-                 &o.key_rings, &o.hints, &o.rocks};  // (order after random_cosmetics: apples, chest_looks, key_rings, hints, rocks)
+                 &o.key_rings, &o.hints, &o.rocks, &o.fast_egg};  // (order after random_cosmetics: apples, chest_looks, key_rings, hints, rocks, fast_egg)
     return i < (int)(sizeof f / sizeof *f) ? f[i] : NULL;
 }
 
@@ -452,6 +455,7 @@ static void start_generation(void) {
             g_opts.miniboss_souls ? "true" : "false");
     fprintf(f, " \"hookshot-anything\": %s,\n", g_opts.hookshot_any ? "true" : "false");
     fprintf(f, " \"race-mode\": %s,\n", g_opts.race ? "true" : "false");  // (runtime only: spoiler lock, seed hash)
+    if (g_opts.fast_egg) fprintf(f, " \"fast-egg\": true,\n");  // (off: not written, seeds as before)
     if (g_opts.hints) fprintf(f, " \"hints\": true,\n");  // (only when on: seeds without it stay as they were)
     fprintf(f, " \"triforce-hunt\": %d, \"triforce-extra\": %d,\n", g_opts.tri_needed, g_opts.tri_extra * 25);
     fprintf(f, " \"entrance-tier\": %d, \"entrance-decoupled\": %s,\n", g_opts.entrances, g_opts.entrances >= 2 && g_opts.decoupled ? "true" : "false");
@@ -619,6 +623,7 @@ static void rows_general(void) {
     if (opt_toggle("Check tracker on overworld map", &g_settings.tracker, true,
                    "The overworld map marks the checks you have and haven't done yet."))
         settings_save();
+    opt_toggle("Fast Egg", &g_opts.fast_egg, true, "First drop in the Wind Fish Egg drops you to the boss.");
 }
 
 static void rows_goal(void) {

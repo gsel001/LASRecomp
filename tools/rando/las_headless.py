@@ -105,6 +105,7 @@ def default_settings(seed):
         'digs': False,  # digsanity: every diggable overworld tile is a check (tools/rando/digs.py)
         'shellsanity': False,  # every Secret Seashell spot is a check (tools/rando/seashell_spots.py); off: vanilla
         'hookshot-anything': False,  # the hookshot latches onto anything (tools/rando/hookshot_logic.py)
+        'fast-egg': False,  # the Egg's first drop lands at the boss, no maze (tools/rando/fast_egg.py)
         'dungeon-room-shuffle': 'off',  # off / coupled / decoupled (tools/rando/dungeon_gen.py; ROOM_MODES)
         'pet-rooster': False, 'pet-ghost': False, 'open-desert': True,  # pets (tools/rando/pets.py)
         'shopsanity': 'off', 'trendsanity': False,  # tools/rando/shopsanity.py (off / vanilla / random prices), trendsanity.py
@@ -765,6 +766,9 @@ def main():
     if settings.get('chest-looks'):  # (every room edit done) the recoloured chests; no chest without a model
         print('chest looks:', chest_looks.write_models(out_dir, romfs), 'models,',
               chest_looks.sweep(out_dir, romfs, _uw_leb), 'chests fixed', flush=True)
+    if settings.get('fast-egg'):
+        import fast_egg
+        print('fast egg:', fast_egg.apply(out_dir, romfs, _uw_leb), flush=True)
     import room_links  # (every room edit done: actors' links within each room must still be sound)
     problems = room_links.check(out_dir, _uw_leb, romfs)
     if problems:
