@@ -8,6 +8,8 @@
 #   so until this file is on main, name a branch that has it)
 #   tag: the release tag; must equal LARECOMP_VERSION (runtime/ui/launcher.mm) at ref - the file names come from it.
 #   ref: branch or commit to build (default: the dispatching branch's head).
+#   platforms: test builds (test-*, ci-test-*) only - just the platforms the fix targets and wants feedback from, e.g.
+#     -f platforms=windows or -f platforms=macos,linux. Releases always build every platform.
 # Dry run of this workflow itself: a tag starting with ci-test- may differ from LARECOMP_VERSION (the files keep its
 # name); its draft is a prerelease, as for test-<name> builds.
 # Also on a release published on GitHub (its tag = LARECOMP_VERSION at the tagged commit): the files are built and
@@ -28,6 +30,10 @@ on:
         description: 'Branch or commit to build (default: the dispatching ref)'
         required: false
         default: ''
+      platforms:
+        description: 'Test builds only: the platforms the fix targets (macos, windows, linux, linux-aarch64; comma list). Empty: all'
+        required: false
+        default: ''
 permissions:
   contents: read
 concurrency:  # (one run per tag at a time; a second waits instead of racing the first's draft)
@@ -41,6 +47,10 @@ jobs:
       sha: ${{ steps.v.outputs.sha }}
       version: ${{ steps.v.outputs.version }}
       skip: ${{ steps.v.outputs.skip }}
+      macos: ${{ steps.v.outputs.macos }}
+      windows: ${{ steps.v.outputs.windows }}
+      linux: ${{ steps.v.outputs.linux }}
+      files: ${{ steps.v.outputs.files }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,6 +60,7 @@ jobs:
         id: v
         env:
           TAG: ${{ inputs.tag || github.event.release.tag_name }}
+          PLATFORMS: ${{ inputs.platforms }}
           ASSETS: ${{ github.event_name == 'release' && toJSON(github.event.release.assets) || '[]' }}
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -72,13 +83,31 @@ jobs:
           if TAGGED=$(gh api "repos/$GITHUB_REPOSITORY/commits/refs/tags/$TAG" -q .sha 2>/dev/null); then
             [ "$TAGGED" = "$SHA" ] || { echo "::error::tag $TAG exists at $TAGGED, not at $SHA"; exit 1; }
           fi
+          # the platforms to build: all for a release; a test build may name only the ones its fix targets
+          ALL="macos windows linux linux-aarch64"
+          PLATFORMS=${PLATFORMS//,/ }
+          if [ -z "${PLATFORMS// /}" ]; then PLATFORMS=$ALL
+          elif [[ $TAG != test-* && $TAG != ci-test-* ]]; then echo "::error::platforms: only for test builds; a release builds all"; exit 1; fi
+          LINUX=(); N=0
+          for p in $PLATFORMS; do
+            case $p in
+              macos|windows) echo "$p=true" >> "$GITHUB_OUTPUT" ;;
+              linux) LINUX+=('{"arch":"x86_64","runner":"ubuntu-24.04"}') ;;
+              linux-aarch64) LINUX+=('{"arch":"aarch64","runner":"ubuntu-24.04-arm"}') ;;
+              *) echo "::error::platform '$p': macos, windows, linux or linux-aarch64"; exit 1 ;;
+            esac
+            N=$((N + 1))
+          done
+          echo "linux=[$(IFS=,; echo "${LINUX[*]}")]" >> "$GITHUB_OUTPUT"
+          echo "files=$N" >> "$GITHUB_OUTPUT"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "platforms: $PLATFORMS"
           echo "$TAG: $SHA, LARECOMP_VERSION $VERSION"
 
   macos:
     needs: check
-    if: needs.check.outputs.skip != 'true'
+    if: needs.check.outputs.skip != 'true' && needs.check.outputs.macos == 'true'
     runs-on: [self-hosted, macos-vm]  # (a fresh Tart VM per job on the maintainer's Mac, deleted after; macOS 15)
     steps:
       - uses: actions/checkout@v4
@@ -139,7 +168,7 @@ jobs:
 
   windows:
     needs: check
-    if: needs.check.outputs.skip != 'true'
+    if: needs.check.outputs.skip != 'true' && needs.check.outputs.windows == 'true'
     runs-on: windows-2022
     defaults:
       run:
@@ -211,14 +240,12 @@ jobs:
   # x86-64 machine building the aarch64 AppImage).
   linux:
     needs: check
-    if: needs.check.outputs.skip != 'true'
+    if: needs.check.outputs.skip != 'true' && needs.check.outputs.linux != '[]'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { arch: x86_64, runner: ubuntu-24.04 }
-          - { arch: aarch64, runner: ubuntu-24.04-arm }
+        include: ${{ fromJSON(needs.check.outputs.linux) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -297,7 +324,10 @@ jobs:
 
   release:
     needs: [check, macos, windows, linux]
-    if: needs.check.outputs.skip != 'true'
+    # (a test build's platforms left out are skipped, not failed)
+    if: >-
+      always() && needs.check.result == 'success' && needs.check.outputs.skip != 'true' &&
+      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-24.04
     permissions:
       contents: write  # (only here: the draft release)
@@ -311,12 +341,13 @@ jobs:
           TAG: ${{ inputs.tag || github.event.release.tag_name }}
           EVENT: ${{ github.event_name }}
           SHA: ${{ needs.check.outputs.sha }}
+          FILES: ${{ needs.check.outputs.files }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           cd dist
           ls -la
-          [ "$(ls | wc -l)" = 4 ] || { echo "::error::expected 4 files"; exit 1; }
+          [ "$(ls | wc -l | tr -d ' ')" = "$FILES" ] || { echo "::error::expected $FILES files"; exit 1; }
           if [ "$EVENT" = release ]; then  # (published on GitHub: attach the files, the notes get the sha256 table)
             gh release view "$TAG" --json body -q .body | grep -v '^> The download files are being built' > ../body.md || true
             { cat ../body.md; echo; echo "| File | sha256 |"; echo "|---|---|"
