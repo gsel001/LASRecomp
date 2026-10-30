@@ -3842,12 +3842,19 @@ static void draw_one(CmdRec *r, bool indexed) {
         if (last_hash) widescreen_backdrop_seen(last_hash);
         extern void widescreen_scene_ubo(const float *u, uint64_t size);  // (the camera's view-projection)
         if (st.ubuf[0][5].addr) widescreen_scene_ubo((const float *)(uintptr_t)st.ubuf[0][5].addr, st.ubuf[0][5].size);
-        if (st.ubuf[0][5].addr && st.ubuf[0][5].size == 320) {  // (the weather: the camera, and the depth it draws into)
-            weather_scene_camera((const float *)(uintptr_t)st.ubuf[0][5].addr, st.ubuf[0][5].size, renderer_exec_frame());
-            if (st.rt.depth && st.rt.depth->width >= 640 && renderer_format_is_depth(st.rt.depth->format))
-                wx_depth = st.rt.depth, wx_depth_frame = renderer_exec_frame(), wx_zn = st.depth_range[0][0], wx_zf = st.depth_range[0][1],
-                wx_dm1 = nvn_depth_mode() == 0;
-        }
+        // (the weather: the camera, and the depth it draws into) The scene's draws carry the camera block in vertex
+        // constant slot 5 (320 bytes: view, projection, view-projection) - but on some frames none does (Field_11E,
+        // for seconds at a time, standing still): then the level model's view-projection (its slot 1, the same matrix)
+        bool into_scene = st.rt.ncolor && st.rt.color[0] && st.rt.depth && st.rt.depth->width >= 640 &&
+                          st.rt.color[0]->width == st.rt.depth->width && renderer_format_is_depth(st.rt.depth->format);
+        uint64_t s4 = st.ubuf[0][4].addr ? st.ubuf[0][4].size : 0;
+        bool cam = st.ubuf[0][5].addr && st.ubuf[0][5].size == 320,
+             level = !cam && into_scene && (s4 == 912 || s4 == 928) && st.ubuf[0][1].addr && st.ubuf[0][1].size == 1024;
+        if (cam) weather_scene_camera((const float *)(uintptr_t)st.ubuf[0][5].addr, st.ubuf[0][5].size, renderer_exec_frame());
+        if (level) weather_scene_vp((const float *)(uintptr_t)st.ubuf[0][1].addr, renderer_exec_frame());
+        if ((cam && st.rt.depth && st.rt.depth->width >= 640 && renderer_format_is_depth(st.rt.depth->format)) || level)
+            wx_depth = st.rt.depth, wx_depth_frame = renderer_exec_frame(), wx_zn = st.depth_range[0][0], wx_zf = st.depth_range[0][1],
+            wx_dm1 = nvn_depth_mode() == 0;
         if (last_hash == 0x71fe31bbf03c3515ull && getenv("LARECOMP_LOG_INDOOR")) {
             static uint64_t lf;
             extern uint64_t renderer_present_count(void);
@@ -4775,9 +4782,16 @@ static void weather_encode(void) {
     uint64_t frame = renderer_exec_frame();
     NvnTexture *win = st.rt.ncolor ? st.rt.color[0] : NULL, *dep = wx_depth;
     extern bool mirror_scene_size(uint32_t sw, uint32_t sh, uint32_t w, uint32_t h);
-    if (off || !win || !dep || wx_depth_frame != frame || fabsf(wx_zf - wx_zn) < 1e-6f ||
-        !mirror_scene_size(dep->width, dep->height, win->width, win->height))
-        return;
+    int why = off ? 1 : !win ? 2 : !dep ? 3 : wx_depth_frame != frame ? 4 : fabsf(wx_zf - wx_zn) < 1e-6f ? 5 :
+              !mirror_scene_size(dep->width, dep->height, win->width, win->height) ? 6 : 0;
+    static int wlog = -1, wlast = -1;  // LARECOMP_LOG_WEATHER=1 (test): why the renderer skips the weather, as that changes
+    if (wlog < 0) wlog = getenv("LARECOMP_LOG_WEATHER") != NULL;
+    if (wlog && why != wlast)
+        LOG("[weather] frame %llu renderer: %s (depth %ux%u window %ux%u)\n", (unsigned long long)frame,
+            (const char *const[]){"ok", "skip", "no window", "no depth", "depth from another frame", "depth range", "depth size"}[why],
+            dep ? dep->width : 0, dep ? dep->height : 0, win ? win->width : 0, win ? win->height : 0);
+    wlast = why;
+    if (why) return;
     float wsx, wsy, dsx, dsy;
     renderer_texture_scale(win, &wsx, &wsy);
     renderer_texture_scale(dep, &dsx, &dsy);

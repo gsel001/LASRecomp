@@ -21,12 +21,19 @@ extern void input_rumble_pulse(uint16_t lo, uint16_t hi, uint32_t ms);  // runti
 
 static float g_cam[80];  // the frame's camera block (weather_scene_camera)
 static uint64_t g_cam_frame = ~0ull;
+static bool g_cam_view;  // (g_cam's view and projection are there - not only its view-projection: weather_scene_vp)
 
 void weather_scene_camera(const float *u, uint64_t size, uint64_t frame) {
     if (size != 320 || g_cam_frame == frame) return;  // (the frame's first scene draw)
     if (u[12] != 0 || u[13] != 0 || u[14] != 0 || u[15] != 1 || u[30] != -1 || u[31] != 0) return;  // perspective
     memcpy(g_cam, u, sizeof g_cam);
-    g_cam_frame = frame;
+    g_cam_frame = frame, g_cam_view = true;
+}
+
+void weather_scene_vp(const float *vp, uint64_t frame) {
+    if (g_cam_frame == frame || vp[15] == 1) return;  // (perspective: its w row isn't 0 0 0 1)
+    memcpy(g_cam + 32, vp, 16 * sizeof(float));
+    g_cam_frame = frame, g_cam_view = false;
 }
 
 // LARECOMP_WEATHER=off|rain|snow|storm|blizzard|random (test): instead of the setting
@@ -648,6 +655,16 @@ static void weather_wind(WeatherFrame *f, int kind, double dt, float size) {
     pthread_mutex_unlock(&g_link_lock);
 }
 
+// LARECOMP_LOG_WEATHER=1 (test): why the weather isn't drawn, each time that changes
+static bool wx_off(int why, uint64_t frame) {
+    static int env = -1, last = -1;
+    if (env < 0) env = getenv("LARECOMP_LOG_WEATHER") != NULL;
+    if (env && why != last) LOG("[weather] frame %llu: %s\n", (unsigned long long)frame,
+                               (const char *const[]){"drawn", "not field", "boxed", "off", "no camera", "camera", "volume", "camera height"}[why]);
+    last = why;
+    return why == 0;
+}
+
 bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PROBES]) {
     g_ntrees = g_trees_next, g_trees_next = 0;  // (the trees the scene drew this frame: weather_snow_tree)
     // host time, counted only while the overworld is on screen (a menu or a door stops it)
@@ -669,7 +686,8 @@ bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PR
         g_cover = snowy(kind) ? fminf(1, g_cover + (float)dt / (kind == WEATHER_BLIZZARD ? g_build * 0.45f : g_build))  // (a blizzard: faster)
                               : fmaxf(0, g_cover - (float)dt / 30);
     }
-    if (!field || kind == WEATHER_OFF || g_cam_frame != frame) return false;
+    if (!field || kind == WEATHER_OFF || g_cam_frame != frame)
+        return wx_off(!level_is_field() ? 1 : !field ? 2 : kind == WEATHER_OFF ? 3 : 4, frame);
     if (dt > 0 && dt < 0.25) t += dt;
     if (snowy(kind)) {
         static int tm = -1;  // LARECOMP_SNOW_TIME=1 (test): the footprints' and kicked-up snow's CPU time (render thread)
@@ -691,7 +709,7 @@ bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PR
     f->count = f->splashes = 0;
     f->kind = kind;
     memcpy(f->vp, g_cam + 32, sizeof f->vp);
-    if (!mat_inverse(f->vp, f->inv_vp)) return false;
+    if (!mat_inverse(f->vp, f->inv_vp)) return wx_off(5, frame);
     // the ground's height: the scene depth at a few screen points (probe: the last frame's), their median
     static uint64_t ground_frame;
     float ys[WEATHER_PROBES];
@@ -713,14 +731,20 @@ bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PR
     float c[3], a[3], b[3];
     if (!unproject_floor(f->inv_vp, 0, 0, ground, c) || !unproject_floor(f->inv_vp, -1, -1, ground, a) ||
         !unproject_floor(f->inv_vp, 1, 1, ground, b))
-        return false;
+        return wx_off(6, frame);
     float w = fabsf(b[0] - a[0]), d = fabsf(b[2] - a[2]);
     // the camera (from the view matrix: -R^T t); the volume stays well below it (drops near the lens would be huge)
     // and leans toward it as the view does (its middle on the centre ray)
     float cp[3];
-    for (int i = 0; i < 3; i++) cp[i] = -(g_cam[0 * 4 + i] * g_cam[3] + g_cam[1 * 4 + i] * g_cam[7] + g_cam[2 * 4 + i] * g_cam[11]);
+    if (g_cam_view)
+        for (int i = 0; i < 3; i++) cp[i] = -(g_cam[0 * 4 + i] * g_cam[3] + g_cam[1 * 4 + i] * g_cam[7] + g_cam[2 * 4 + i] * g_cam[11]);
+    else {  // (only the view-projection: the camera is the point it takes to clip x = y = w = 0 - inv_vp (0, 0, 1, 0))
+        float h = f->inv_vp[14];
+        if (!(fabsf(h) > 1e-9f)) return wx_off(5, frame);
+        for (int i = 0; i < 3; i++) cp[i] = f->inv_vp[i * 4 + 2] / h;
+    }
     float cam_h = cp[1] - c[1];
-    if (!(cam_h > 1)) return false;
+    if (!(cam_h > 1)) return wx_off(7, frame);
     // (the overworld camera: ~17.7 above the ground, its view ~24 x 19 of it; the volume from 1.5 under the ground to
     // 8.5 over it, half way to the camera)
     const float size = 34, height = 10, mid = height * 0.5f - 1.5f;
@@ -772,5 +796,5 @@ bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PR
     if (getenv("LARECOMP_LOG_WEATHER") && logged++ % 120 == 0)
         LOG("[weather] kind %d ground %.2f (%d probes) centre %.2f %.2f %.2f floor %.2f x %.2f size %.2f height %.2f cam %.2f %.2f %.2f\n", kind, ground, ny, c[0], c[1],
             c[2], w, d, size, height, cp[0], cp[1], cp[2]);
-    return true;
+    return wx_off(0, frame);
 }

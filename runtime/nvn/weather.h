@@ -41,6 +41,9 @@ typedef struct {
 // A scene draw's camera block (vertex constant slot 5, 320 bytes: view, projection, view-projection; perspective only)
 // - the renderer passes every one; the frame's first is the camera. frame: the frame being translated.
 void weather_scene_camera(const float *u, uint64_t size, uint64_t frame);
+// (a frame whose scene draws carry no camera block: the level model's view-projection, rows - the camera's place
+// comes from its inverse)
+void weather_scene_vp(const float *vp, uint64_t frame);
 // After the frame's scene composite: what to draw (false: nothing - off, not outdoors, no camera this frame). The
 // renderer fills screen, flags and zr first; probe: the scene depth at g_weather_probe_uv as the particle draw read it
 // last frame (the ground's height; NULL: none yet) - written by its first vertex.
