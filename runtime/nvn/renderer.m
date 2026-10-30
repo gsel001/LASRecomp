@@ -4559,19 +4559,25 @@ static const char *wx_src =
     "  o.a = (1.0 - smoothstep(life - rest, life, a)) * smoothstep(0.0, 0.4, a) * wx_fade(w, p);\n"
     "  return o;\n"
     "}\n"
-    "fragment float4 wx_leaf_fs(LO in [[stage_in]], constant WF &w [[buffer(0)]], depth2d<float> dt [[texture(0)]],\n"
-    "                           texture2d<float> lt [[texture(1)]], sampler sm [[sampler(0)]]) {\n"
+    // a leaf drawn here (the game's cut-bush debris is a square sheet of clippings, not one leaf): a pointed
+    // ellipse - round at the stalk, a point at the tip - with a soft edge, a midrib, the two halves shaded apart
+    // (the light from one side) and a short stalk; its flip (wx_leaf_vs: the quad narrows) shows its thin edge
+    "fragment float4 wx_leaf_fs(LO in [[stage_in]], constant WF &w [[buffer(0)]], depth2d<float> dt [[texture(0)]]) {\n"
     "  if (wx_hidden(w, dt, in.pos)) discard_fragment();\n"
-    "  float4 t;\n"
-    "  if (lt.get_width() > 1u) { t = lt.sample(sm, in.uv); if (w.leaf.r >= 0.0) t.rgb = w.leaf.rgb * max(t.r, max(t.g, t.b)); }\n"  // (the game's own leaf)
-    "  else {\n"  // (none found: a plain leaf - an almond with a midrib, lit from one side - in the leaves' colour)
-    "    float2 q = in.uv * 2.0 - 1.0;\n"
-    "    float e = q.x * q.x / (0.42 * (1.0 - q.y * q.y) + 1e-3) + q.y * q.y;\n"
-    "    float shade = (0.75 + 0.25 * q.x) * (1.0 - 0.3 * smoothstep(0.1, 0.0, abs(q.x)));\n"
-    "    float3 col = w.leaf.rgb.r < 0.0 ? float3(0.36, 0.62, 0.2) : w.leaf.rgb;\n"
-    "    t = float4(col * shade, 1.0 - smoothstep(0.8, 1.0, e));\n"
-    "  }\n"
-    "  return float4(t.rgb, t.a * in.a);\n"
+    "  float2 q = in.uv * 2.0 - 1.0;\n"  // (y: stalk -1 .. tip 1)
+    "  float y = q.y * 1.1 + 0.05;\n"
+    "  float hw = 0.62 * sqrt(saturate(1.0 - y * y)) * (1.0 - 0.45 * saturate(y));\n"  // (wider at the base, a point at the tip)
+    "  float edge = hw - abs(q.x);\n"
+    "  float px = fwidth(q.x) * 1.5;\n"
+    "  float a = smoothstep(-px, px, edge);\n"
+    "  a = max(a, (1.0 - smoothstep(0.03, 0.03 + px, abs(q.x))) * step(-1.0, q.y) * step(q.y, -0.85));\n"  // (the stalk)
+    "  if (a <= 0.0) discard_fragment();\n"
+    "  float3 col = w.leaf.r < 0.0 ? float3(0.30, 0.55, 0.16) : w.leaf.rgb;\n"
+    "  float side = q.x > 0.0 ? 1.0 : 0.72;\n"  // (two-tone: the halves catch the light apart)
+    "  float rib = 1.0 - 0.35 * (1.0 - smoothstep(0.0, 0.05 + px, abs(q.x))) * step(q.y, 0.85);\n"
+    "  float veins = 1.0 - 0.12 * smoothstep(0.85, 1.0, sin((q.y - abs(q.x) * 1.2) * 18.0)) * step(0.06, abs(q.x));\n"
+    "  float rim = mix(0.8, 1.0, smoothstep(0.0, 0.18, edge));\n"  // (a darker rim)
+    "  return float4(col * side * rib * veins * rim, a * in.a);\n"
     "}\n"
     // the fill: out = rgb + picture * a (overcast, lightning)
     "vertex float4 wx_fill_vs(uint vid [[vertex_id]]) {\n"
@@ -4679,28 +4685,8 @@ static void weather_encode(void) {
         [e setRenderPipelineState:pipe[1]];
         [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4 instanceCount:wf.splashes];
     }
-    if (wf.leaf[3] > 0 && !dbg) {  // (a storm's leaves: the game's own leaf - the one cut bushes throw - if found)
-        static NvnTexture *leaf_tex;
-        static double look_at;
-        extern NvnTexture *renderer_find_game_texture(const char *name);
-        if (!leaf_tex && now_ms() >= look_at) {  // (looked for again every 5 s until found)
-            look_at = now_ms() + 5000;
-            leaf_tex = renderer_find_game_texture(getenv("LARECOMP_LEAF_TEX") ? getenv("LARECOMP_LEAF_TEX") : "grass_01");
-            if (leaf_tex) LOG("[weather] leaf texture %ux%u format %#x\n", leaf_tex->width, leaf_tex->height, leaf_tex->format);
-        }
-        static id<MTLTexture> none;
-        static id<MTLSamplerState> smp;
-        if (!none) {
-            MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:1 height:1 mipmapped:NO];
-            none = [dev newTextureWithDescriptor:td];
-            MTLSamplerDescriptor *sd = [MTLSamplerDescriptor new];
-            sd.minFilter = sd.magFilter = MTLSamplerMinMagFilterLinear, sd.mipFilter = MTLSamplerMipFilterLinear;
-            smp = [dev newSamplerStateWithDescriptor:sd];
-        }
-        id<MTLTexture> lt = leaf_tex ? renderer_texture(leaf_tex, nil, false) : nil;
+    if (wf.leaf[3] > 0 && !dbg) {  // (a storm's leaves)
         [e setRenderPipelineState:pipe[4]];
-        [e setFragmentTexture:lt ? lt : none atIndex:1];
-        [e setFragmentSamplerState:smp atIndex:0];
         [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4 instanceCount:(NSUInteger)wf.leaf[3]];
     }
     if ((wf.kind == WEATHER_SNOW || wf.kind == WEATHER_BLIZZARD) && !dbg) {  // (the snow Link kicked up)
