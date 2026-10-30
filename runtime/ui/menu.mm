@@ -535,22 +535,28 @@ static void tab_display(void) {
 extern "C" bool cosmetics_seed_on(void);  // runtime/cosmetics_seed.c
 
 // Cosmetics: tunic / heart colours, live (runtime/nvn/texpatch.c), and recolours by draw (runtime/nvn/recolour*.c);
-// a seed made with "Random cosmetics" fills the rows left on Default (shown as "Seed: <colour>")
+// a seed made with "Random cosmetics" has its own, and the page is locked while it's played (rows greyed out, showing
+// the seed's): the player's own choices stay saved for another seed or vanilla
 static void tab_cosmetics(void) {
     opt_begin("##cosmetics", ImGui::GetFontSize() / 34);
     CosColour *rows[] = {&g_settings.tunic, &g_settings.hearts, &g_settings.hair, &g_settings.skin, &g_settings.shield,
                          &g_settings.leaves, &g_settings.grass, &g_settings.sand, &g_settings.water,
                          &g_settings.fences, &g_settings.walls, &g_settings.houses};
-    if (opt_button("Randomize all", "Every color below gets a random color."))
-        for (CosColour *c : rows) c->pick = 1 + rand() % (COL_RANDOM - 1);  // (a named colour: shown as what it is)
-    if (opt_button("Default all", "Everything on this page back to the game's own look.")) {
-        for (CosColour *c : rows) c->pick = COL_DEFAULT;
-        g_settings.enemy_colours = 0;
-        g_settings.screen_filter = 0;
+    bool seed = cosmetics_seed_on();
+    if (seed) {
+        opt_disable_next();
+        opt_action("This seed picked your look. Commit to it!", "", NULL, false);
+    } else {
+        if (opt_button("Randomize all", "Every color below gets a random color."))
+            for (CosColour *c : rows) c->pick = 1 + rand() % (COL_RANDOM - 1);  // (a named colour: shown as what it is)
+        if (opt_button("Default all", "Everything on this page back to the game's own look.")) {
+            for (CosColour *c : rows) c->pick = COL_DEFAULT;
+            g_settings.enemy_colours = 0;
+            g_settings.screen_filter = 0;
+        }
     }
     opt_section("Colors");
-    opt_colour("Tunic color", &g_settings.tunic, COL_SLOT_TUNIC,
-               "Link's tunic color. Default: the game's own (or the randomizer seed's).");
+    opt_colour("Tunic color", &g_settings.tunic, COL_SLOT_TUNIC, "Link's tunic color.");
     opt_colour("Heart color", &g_settings.hearts, COL_SLOT_HEARTS, "The color of the hearts on the HUD.");
     opt_colour("Hair color", &g_settings.hair, COL_SLOT_HAIR, "Link's hair color.");
     opt_colour("Body color", &g_settings.skin, COL_SLOT_SKIN, "Link's body color.");  // (larecomp.ini: skin)
@@ -569,6 +575,7 @@ static void tab_cosmetics(void) {
                 col_pick(&g_settings.sand, COL_SLOT_SAND) == preset[i][2])
                 cur = i;
         int v = cur;
+        if (seed) opt_disable_next();
         if (opt_choice("Season", &v, names, 5, 0, "Sets the leaves, grass and sand colors below.") && v != cur) {
             if (v == 4) v = cur == 0 ? 3 : 0;  // (Mixed is never chosen: past the ends, back round)
             g_settings.leaves.pick = preset[v][0];
@@ -584,16 +591,18 @@ static void tab_cosmetics(void) {
     opt_colour("Wall color", &g_settings.walls, COL_SLOT_WALLS, "The overworld's cliff walls and ledges.");
     opt_colour("House color", &g_settings.houses, COL_SLOT_HOUSES, "The village houses' roofs.");
     opt_section("Enemies");
-    {   // (Off in a seed with its own cosmetics: "Seed", its enemies are per seed)
+    {   // (a seed with its own cosmetics: "Seed", its enemies are per seed; and no screen filter)
         const char *modes[N_ENEMY_COLOUR_MODES];
         for (int i = 0; i < N_ENEMY_COLOUR_MODES; i++) modes[i] = g_enemy_colour_modes[i];
-        if (cosmetics_seed_on()) modes[0] = "Seed";
-        opt_choice("Enemy colors", &g_settings.enemy_colours, modes, N_ENEMY_COLOUR_MODES, 0,
+        int shown = 0;
+        if (seed) modes[0] = "Seed", opt_disable_next();
+        opt_choice("Enemy colors", seed ? &shown : &g_settings.enemy_colours, modes, N_ENEMY_COLOUR_MODES, 0,
                    "Each kind of enemy in another color. Enemies whose color shows their strength or type keep theirs.");
+        opt_section("Screen");
+        if (seed) opt_disable_next();
+        opt_choice("Screen filter", seed ? &shown : &g_settings.screen_filter, g_screen_filters, N_SCREEN_FILTERS, 0,
+                   "A filter over the whole picture, the HUD included.");
     }
-    opt_section("Screen");
-    opt_choice("Screen filter", &g_settings.screen_filter, g_screen_filters, N_SCREEN_FILTERS, 0,
-               "A filter over the whole picture, the HUD included.");
     opt_end();
 }
 

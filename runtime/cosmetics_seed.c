@@ -2,8 +2,8 @@
 // made with it has its own set, picked from its seed (the same every time it's played): a fully random colour (any
 // hue, saturation and brightness) for each of the tunic, hearts, hair, skin, shield, leaves, grass, sand, water,
 // fences, walls and houses, and enemy colours "per seed" (the screen filter stays off: it isn't a colour). Only while
-// that seed is being played (never in vanilla), and only for Cosmetics rows left on Default / Off: whatever the player
-// chose in the Cosmetics tab wins.
+// that seed is being played (never in vanilla), over whatever the player chose: the Cosmetics tab is locked meanwhile
+// (the player's own choices stay saved, and are back in another seed or vanilla).
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
@@ -65,7 +65,7 @@ static int seed_pick(int slot, uint32_t *rgb) {
     return p;
 }
 
-// The seed has its own cosmetics (enemy colours "per seed" while the row is Off)
+// The seed has its own cosmetics (the Cosmetics tab is locked; enemy colours "per seed", no screen filter)
 bool cosmetics_seed_on(void) {
     pthread_mutex_lock(&g_lock);
     refresh_locked();
