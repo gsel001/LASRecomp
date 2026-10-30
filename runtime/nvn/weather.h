@@ -104,3 +104,6 @@ bool weather_strike(StrikeFrame *s);  // (false: none showing)
 // Off by default - the Cosmetics tab's weather and a seed's own are looks only; meant for a randomizer weather option
 // (LARECOMP_WEATHER_HARM=1: on, for tests)
 void weather_lightning_harm(bool on);
+// A blizzard's wind pushing Link a little (through his collision: walls stop it; the stick works against it). Off by
+// default, like weather_lightning_harm - for the randomizer (LARECOMP_WEATHER_PUSH=1: on, for tests)
+void weather_wind_push(bool on);

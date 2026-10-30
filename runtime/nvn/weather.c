@@ -172,6 +172,8 @@ static pthread_mutex_t g_link_lock = PTHREAD_MUTEX_INITIALIZER;
 static float g_link[3];       // Link's position as the game thread read it last (PlayerCollision +0x80: his feet)
 static double g_link_at;      // (host time then)
 static uint64_t g_link_n;     // (samples so far)
+static float g_wind[2];       // the wind's velocity now (world x, z per s: weather_wind, render thread)
+static double g_wind_at;      // (host time then)
 
 static double host_now(void) {
     struct timespec ts;
@@ -554,6 +556,40 @@ static void strike_tick(Cpu *c) {
     if (__atomic_exchange_n(&g_shock, 0, __ATOMIC_ACQ_REL) && ok) link_shock(c);
 }
 
+// ---- a blizzard's wind pushing Link (for a randomizer option to come: off by default - the Cosmetics tab's weather is
+// looks only). tools/patches.py WIND_PUSH_SITE: in his move, the frame's displacement summed, before the collision
+// move - a share of the wind's velocity added there (walls and ledges stop it like his walking; the stick works
+// against it). Only on the overworld in states 0/1/2/10/26 (link_free), not in a pit's pull or a knockback; weaker
+// on slow ground (tall grass, shallow water) so a headwind never walks him backwards there
+static bool g_push = false;
+void weather_wind_push(bool on) { g_push = on; }
+
+void rt_wind_push(Cpu *c) {
+    static int env = -1;  // LARECOMP_WEATHER_PUSH=1 (test): on, as the randomizer's option will
+    if (env < 0) env = getenv("LARECOMP_WEATHER_PUSH") != NULL;
+    if (!(g_push || env) || weather_current() != WEATHER_BLIZZARD || !g_outdoors) return;
+    uint64_t link = c->x[19];
+    uint8_t id = LD8(link + 0x4ed);
+    if (id >= 32 || !((1u << id) & (1u << 0 | 1u << 1 | 1u << 2 | 1u << 10 | 1u << 26))) return;
+    uint16_t ground = LD16(link + 0x1700);
+    uint64_t kb = LD64(link + 0x1578);
+    if ((ground & 0x3c0) == 0x180 || (kb && LD8(kb + 0x1a) == 2) || !level_is_field()) return;
+    float w[2];
+    pthread_mutex_lock(&g_link_lock);
+    memcpy(w, g_wind, sizeof w);
+    double at = g_wind_at;
+    pthread_mutex_unlock(&g_link_lock);
+    if (host_now() - at > 0.5) return;  // (the weather not drawn lately: a menu, a door)
+    float dt;
+    memcpy(&dt, &c->v[1], 4);
+    if (!(dt > 0 && dt < 0.1f)) dt = 1 / 60.0f;
+    static float k = -1;  // LARECOMP_WEATHER_PUSH_K (test): the share of the wind (0.14: a gust 1-1.5 / s, Link walks 4.5)
+    if (k < 0) k = env_f("LARECOMP_WEATHER_PUSH_K", 0.14f);
+    float s = k * ((unsigned)((ground & 0x3f) - 0x15) <= 1 ? 0.3f : 1);  // (slow ground: walking x0.25 / x0.75)
+    float *d = (float *)(uintptr_t)(c->x[29] - 0x80);
+    d[0] += w[0] * s * dt, d[2] += w[1] * s * dt;
+}
+
 // The wind: rain and storm blow steadily along x, snow drifts gently; a blizzard has a light wind of its own and
 // gusts - every 5-12 s it blows hard (7-11 world units / s) from a new direction for 2-5 s, ramped up and back down
 // smoothly. wind[0..1]: the drift so far (wrapped at the volume's size: the particles' positions wrap with it),
@@ -588,6 +624,9 @@ static void weather_wind(WeatherFrame *f, int kind, double dt, float size) {
     }
     dx = fmod(dx + vx * dt, size), dz = fmod(dz + vz * dt, size);
     f->wind[0] = (float)dx, f->wind[1] = (float)dz, f->wind[2] = vx, f->wind[3] = vz;
+    pthread_mutex_lock(&g_link_lock);  // (for the game thread: a blizzard's push on Link, wind_tick)
+    g_wind[0] = (float)vx, g_wind[1] = (float)vz, g_wind_at = host_now();
+    pthread_mutex_unlock(&g_link_lock);
 }
 
 bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PROBES]) {

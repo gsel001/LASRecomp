@@ -556,6 +556,23 @@ for _a in WALK_SPEED_SITES:
     PATCHES[_a] = _walk_speed
 
 
+# Wind push (runtime/nvn/weather.c rt_wind_push: a blizzard's wind, for a randomizer option; off by default): Link's
+# move (main+0xd57260, every state's) has just summed the frame's displacement - knockback, walking, a pit's pull, a
+# platform's carry - at [x29-0x80] (world units, this frame; x19 = Link, s1 = the frame's dt) and hands it to the
+# collision move next, so a push added there is stopped by walls and ledges like his walking.
+WIND_PUSH_SITE = A.WIND_PUSH_SITE
+
+
+def _wind_push(gen, a):
+    w = struct.unpack_from('<I', gen.nso.image, a - gen.base)[0]
+    assert w == 0x38686a68, hex(w)  # ldrb w8, [x19, x8]
+    return ('{ extern void rt_wind_push(Cpu *); rt_wind_push(c); c->x[8] = LD8(c->x[19] + c->x[8]); }'
+            f'  /* {a:#x}: ldrb w8, [x19, x8] (Link move: the wind push) */')
+
+
+PATCHES[WIND_PUSH_SITE] = _wind_push
+
+
 # Walk animation rate: main+0xdce320 (walk state) has the walk animation's play rate in s8 (1, 0.75 on slow ground,
 # x1.15 with a Piece of Power), handed to the animation layers right after.
 def _walk_anim(gen, a):
