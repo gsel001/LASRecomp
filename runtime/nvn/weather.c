@@ -616,9 +616,9 @@ void rt_wind_push(Cpu *c) {
     d[0] += w[0] * s * dt, d[2] += w[1] * s * dt;
 }
 
-// The wind: rain and storm blow steadily along x, snow drifts gently; a blizzard has a light wind of its own and
-// gusts - every 5-12 s it blows hard (7-11 world units / s) from a new direction for 2-5 s, ramped up and back down
-// smoothly. wind[0..1]: the drift so far (wrapped at the volume's size: the particles' positions wrap with it),
+// The wind: rain and storm blow steadily along x, snow drifts gently; a blizzard has a wind of its own and gusts -
+// 1-4 s after one dies down the next blows hard (8-12 world units / s) from a new direction for 4-8 s, ramped up and
+// back down smoothly. wind[0..1]: the drift so far (wrapped at the volume's size: the particles' positions wrap with it),
 // wind[2..3]: the velocity now. LARECOMP_BLIZZARD_GUST=<s> (test): the first gust then, from LARECOMP_BLIZZARD_DIR
 // (degrees, 0 = screen right, 90 = screen up; every gust)
 static void weather_wind(WeatherFrame *f, int kind, double dt, float size) {
@@ -629,11 +629,11 @@ static void weather_wind(WeatherFrame *f, int kind, double dt, float size) {
         if (gust_at < 0) {
             gust_at = getenv("LARECOMP_BLIZZARD_GUST") ? atof(getenv("LARECOMP_BLIZZARD_GUST")) : t + 3;
             gust_ang = getenv("LARECOMP_BLIZZARD_DIR") ? (float)atof(getenv("LARECOMP_BLIZZARD_DIR")) * 0.0174533f : frand() * 6.2832f;
-            gust_len = 3, gust_str = 9, base_ang = frand() * 6.2832f;
+            gust_len = 5, gust_str = 10, base_ang = frand() * 6.2832f;
         }
         double a = t - gust_at;
         if (a > gust_len + 3.5) {  // (the next gust, from somewhere else)
-            gust_at = t + 3 + frand() * 6, gust_len = 2 + frand() * 3, gust_str = 7 + frand() * 4;
+            gust_at = t + 1 + frand() * 3, gust_len = 4 + frand() * 4, gust_str = 8 + frand() * 4;
             gust_ang += 1.2f + frand() * 3.9f;  // (at least ~70 degrees off the last)
             if (getenv("LARECOMP_BLIZZARD_DIR")) gust_ang = (float)atof(getenv("LARECOMP_BLIZZARD_DIR")) * 0.0174533f;
             a = t - gust_at;
@@ -642,8 +642,8 @@ static void weather_wind(WeatherFrame *f, int kind, double dt, float size) {
         env = env * env * (3 - 2 * env);  // (smooth ramps)
         base_ang += (float)dt * 0.05f;
         // screen right = world +x, screen up = world -z (the overworld's camera looks north)
-        vx = 1.2f * cosf(base_ang) + env * gust_str * cosf(gust_ang);
-        vz = -1.2f * sinf(base_ang) - env * gust_str * sinf(gust_ang);
+        vx = 2 * cosf(base_ang) + env * gust_str * cosf(gust_ang);
+        vz = -2 * sinf(base_ang) - env * gust_str * sinf(gust_ang);
     } else {
         vx = kind == WEATHER_SNOW ? 0.6f : kind == WEATHER_STORM ? 8 : 3, vz = 0;
         gust_at = -1;
@@ -757,7 +757,7 @@ bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PR
     // over time instead - weather_wind - so a gust carries the flakes along without moving them back or ahead)
     weather_wind(f, kind, dt > 0 && dt < 0.25 ? dt : 0, size);
     if (snow) {
-        f->count = bliz ? 3600 : 2000;
+        f->count = bliz ? 5200 : 2000;
         f->shape[0] = 0, f->shape[1] = bliz ? 8.0f : 9.0f, f->shape[2] = bliz ? 3.2f : 2.2f, f->shape[3] = bliz ? 0.3f : 0.5f;
         f->box[3] = 0.6f;
         f->splashes = f->count;  // (every flake lies where it landed)
@@ -766,7 +766,7 @@ bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PR
         f->fill[3] = 1;  // (no overcast: snow is bright)
         if (bliz) {  // (a white haze: the far less clear, more so in a gust)
             float g = sqrtf(f->wind[2] * f->wind[2] + f->wind[3] * f->wind[3]) / 9;
-            float k = 0.04f + 0.05f * fminf(g, 1);
+            float k = 0.055f + 0.065f * fminf(g, 1);
             f->fill[0] = 0.92f * k, f->fill[1] = 0.94f * k, f->fill[2] = 0.98f * k, f->fill[3] = 1 - k;
         }
     } else {
@@ -776,7 +776,7 @@ bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PR
         f->box[3] = storm ? 8 : 3;
         f->cam[3] = 0.35f;
         f->color[0] = 0.80f, f->color[1] = 0.85f, f->color[2] = 0.95f, f->color[3] = storm ? 0.34f : 0.28f;
-        f->fill[3] = storm ? 0.84f : 0.93f;  // (overcast)
+        f->fill[3] = storm ? 0.74f : 0.93f;  // (overcast: a storm's heavier clouds)
         if (storm) {  // (a few leaves blowing about: the Leaves colour if one is set, else the texture's own)
             uint32_t rgb;
             if (col_target(&g_settings.leaves, COL_SLOT_LEAVES, &rgb))  // (sRGB to the scene's linear)
