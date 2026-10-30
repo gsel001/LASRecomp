@@ -256,6 +256,10 @@
     "7000e93b80": {
       "word": "910203ff",
       "sha256": "fc088625ca90de138051512cbbb57924e810c88c665eb91087050ea7af9984e5"
+    },
+    "7000eaa800": {
+      "word": "d102c3ff",
+      "sha256": "56aab3fd4f23756427bc6317de25c5431f83a4bfb833b604f88df0bb9c0826fa"
     }
   },
   "hooks_sha256": "236b51cd2a074e93a321baaa4e9afc7d85c273ed8a4e2617cf413d10e21340b8"

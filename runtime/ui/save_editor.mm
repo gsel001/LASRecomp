@@ -19,6 +19,7 @@ extern "C" bool pets_owned(int c);             // runtime/hle/pets.c
 extern "C" void pets_give(int c, bool on);
 extern "C" const char *rando_seed_dir(void);
 extern "C" const char *chaos_current_level(void);  // runtime/ui/chaos_overlay.mm
+extern "C" void hud_hearts_refresh(void);        // runtime/hle/hud_hearts.c
 static int current_dungeon(void);
 static int g_dungeon;  // (the Dungeon keys section's Dungeon row)
 
@@ -143,9 +144,10 @@ static void max_out(void) {
 // ---- the sections' rows (each its own function: the right column shows one)
 static void sec_quick(void) {
     if (opt_button("Max out everything", "Every heart, item, upgrade, song, instrument and dungeon key, full ammo, "
-                                         "9999 rupees, all 50 Secret Seashells and 5 Golden Leaves.\n\n"
-                                         "The hearts on the HUD update after the next screen change."))
+                                         "9999 rupees, all 50 Secret Seashells and 5 Golden Leaves.")) {
         max_out();
+        hud_hearts_refresh();
+    }
     if (opt_button("Refill hearts & ammo", "Refills health, and the bombs, arrows and Magic Powder Link owns.")) {
         F<int16_t>(HP) = (int16_t)max_hp();
         if (F<uint32_t>(ITEMS) & (1u << 2)) F<uint8_t>(BOMBS) = (F<uint8_t>(UPGRADES) & 0x10) ? 60 : 30;
@@ -156,18 +158,22 @@ static void sec_quick(void) {
 
 static void sec_player(void) {
     if (opt_text("Name", g_name, 9 * 3, NULL, "The save file's name (up to 8 letters).")) write_name(g_name);
+    bool max_changed = false;
     int containers = __builtin_popcount(F<uint16_t>(CONTAINERS) & 0x1FF);
-    if (opt_int("Heart Containers", &containers, 0, 9, 1, 0, "%d / 9",
-                "Heart Containers (one heart each), from the dungeon bosses.\n\n"
-                "The hearts on the HUD update after the next screen change."))
-        F<uint16_t>(CONTAINERS) = (uint16_t)low_bits(containers);
     int pieces = __builtin_popcountll(F<uint64_t>(PIECES) & 0xFFFFFFFFull);
-    if (opt_int("Pieces of Heart", &pieces, 0, 32, 1, 0, "%d / 32",
-                "Pieces of Heart: every 4 make a heart.\n\nThe hearts on the HUD update after the next screen change."))
+    int hearts = 3 + containers + pieces / 4;
+    if (opt_int("Heart Containers", &hearts, 3, 20, 1, 3, "%d / 20",
+                "Link's maximum hearts: Heart Containers first, then Pieces of Heart.")) {
+        containers = hearts - 3 < 9 ? hearts - 3 : 9;
+        pieces = (hearts - 3 - containers) * 4 + (hearts < 20 ? pieces % 4 : 0);  // (keeps a heart's loose pieces)
+        F<uint16_t>(CONTAINERS) = (uint16_t)low_bits(containers);
         F<uint64_t>(PIECES) = low_bits(pieces);
+        max_changed = true;
+    }
     {
         int mh = max_hp();
         if (F<int16_t>(HP) > mh) F<int16_t>(HP) = (int16_t)mh;
+        if (max_changed) hud_hearts_refresh();
         float hearts = F<int16_t>(HP) / 4.0f;
         if (opt_slider("Health", &hearts, 0.25f, mh / 4.0f, 0.25f, mh / 4.0f, "%g hearts",
                        "Link's current health, in quarter hearts."))
@@ -448,6 +454,7 @@ extern "C" void save_editor_frame(uint64_t frame) {
         F<uint8_t>(BOMBS) = 60; F<uint8_t>(ARROWS) = 60; F<uint8_t>(POWDER) = 40; F<uint8_t>(SONGS) = 7;
         F<uint32_t>(KEYITEMS) |= 0x7FFF; F<uint8_t>(SENSOR) |= 1; F<int16_t>(HP) = (int16_t)max_hp();
         sync_header();
+        hud_hearts_refresh();
         LOG("[save] test: maxed out\n");
     }
     static long poke_done;  // LARECOMP_POKE_SAVE=off=val,...: write live-save bytes (hex offsets) once after load
