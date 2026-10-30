@@ -641,6 +641,8 @@
 {"The overworld map marks the checks you have and haven't done yet.", "フィールドマップに済んだチェックとまだのチェックを表示します。"},
 {"Fast Egg", "タマゴの近道"},
 {"First drop in the Wind Fish Egg drops you to the boss.", "聖なるタマゴの最初の穴に落ちると、ボスのところまで行けます。"},
+{"Starting Instruments", "最初の楽器"},
+{"How many instruments you start with.", "最初から持っている楽器の数です。"},
 {"Triforce hunt", "トライフォース集め"},
 {"Collect Triforce pieces to win. The last one you need rolls the credits, no Wind Fish required.", "トライフォースのかけらを集めるとクリアです。最後のかけらを手に入れるとエンディングが始まり、かぜのさかなを起こす必要はありません。"},
 {"Pieces needed", "必要なかけら"},

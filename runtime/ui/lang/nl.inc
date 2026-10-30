@@ -641,6 +641,8 @@
 {"The overworld map marks the checks you have and haven't done yet.", "De wereldkaart markeert welke checks je al wel en nog niet gedaan hebt."},
 {"Fast Egg", "Snel ei"},
 {"First drop in the Wind Fish Egg drops you to the boss.", "De eerste val in het Windvis-ei brengt je meteen bij de eindbaas."},
+{"Starting Instruments", "Startinstrumenten"},
+{"How many instruments you start with.", "Hoeveel instrumenten je aan het begin hebt."},
 {"Triforce hunt", "Triforce-jacht"},
 {"Collect Triforce pieces to win. The last one you need rolls the credits, no Wind Fish required.", "Verzamel Triforce-stukken om te winnen. Met het laatste stuk dat je nodig hebt start de aftiteling, de Windvis is niet nodig."},
 {"Pieces needed", "Stukken nodig"},

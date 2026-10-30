@@ -641,6 +641,8 @@
 {"The overworld map marks the checks you have and haven't done yet.", "Карта острова отмечает проверки, которые вы уже прошли и еще нет."},
 {"Fast Egg", "Быстрое Яйцо"},
 {"First drop in the Wind Fish Egg drops you to the boss.", "Первый же спуск в Яйце Рыбы ветров ведет прямо к боссу."},
+{"Starting Instruments", "Инструменты на старте"},
+{"How many instruments you start with.", "Сколько инструментов у тебя в начале."},
 {"Triforce hunt", "Охота за Трифорсом"},
 {"Collect Triforce pieces to win. The last one you need rolls the credits, no Wind Fish required.", "Для победы соберите части Трифорса. Последняя нужная часть запускает титры, Рыба ветров не нужна."},
 {"Pieces needed", "Нужно частей"},
