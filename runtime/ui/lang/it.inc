@@ -641,6 +641,8 @@
 {"The overworld map marks the checks you have and haven't done yet.", "La mappa del mondo esterno segna i controlli che hai fatto e quelli che ti mancano."},
 {"Fast Egg", "Uovo rapido"},
 {"First drop in the Wind Fish Egg drops you to the boss.", "La prima caduta nell'uovo del pesce vento ti porta dritto al boss."},
+{"Starting Instruments", "Strumenti iniziali"},
+{"How many instruments you start with.", "Quanti strumenti hai all'inizio."},
 {"Triforce hunt", "Caccia alla Triforza"},
 {"Collect Triforce pieces to win. The last one you need rolls the credits, no Wind Fish required.", "Raccogli i frammenti della Triforza per vincere. L'ultimo che ti serve fa partire i titoli di coda, senza bisogno del pesce vento."},
 {"Pieces needed", "Frammenti necessari"},

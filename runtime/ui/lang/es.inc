@@ -641,6 +641,8 @@
 {"The overworld map marks the checks you have and haven't done yet.", "El mapa del mundo exterior marca las ubicaciones que ya has hecho y las que no."},
 {"Fast Egg", "Huevo rápido"},
 {"First drop in the Wind Fish Egg drops you to the boss.", "La primera caída en el Huevo del Pez del Viento te lleva directo al jefe."},
+{"Starting Instruments", "Instrumentos iniciales"},
+{"How many instruments you start with.", "Cuántos instrumentos tienes al empezar."},
 {"Triforce hunt", "Caza de la Trifuerza"},
 {"Collect Triforce pieces to win. The last one you need rolls the credits, no Wind Fish required.", "Reúne fragmentos de la Trifuerza para ganar. El último que necesitas lanza los créditos, sin necesidad del Pez del Viento."},
 {"Pieces needed", "Fragmentos necesarios"},

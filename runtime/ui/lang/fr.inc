@@ -641,6 +641,8 @@
 {"The overworld map marks the checks you have and haven't done yet.", "La carte du monde indique les emplacements faits et ceux qui restent."},
 {"Fast Egg", "Œuf rapide"},
 {"First drop in the Wind Fish Egg drops you to the boss.", "La première chute dans l'Œuf Sacré t'amène directement au boss."},
+{"Starting Instruments", "Instruments de départ"},
+{"How many instruments you start with.", "Le nombre d'instruments que tu as au départ."},
 {"Triforce hunt", "Chasse à la Triforce"},
 {"Collect Triforce pieces to win. The last one you need rolls the credits, no Wind Fish required.", "Récupère des fragments de Triforce pour gagner. Le dernier nécessaire lance le générique, sans passer par le Poisson-Rêve."},
 {"Pieces needed", "Fragments requis"},

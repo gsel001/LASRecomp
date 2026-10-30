@@ -641,6 +641,8 @@
 {"The overworld map marks the checks you have and haven't done yet.", "필드 맵에 끝낸 체크와 아직 남은 체크를 표시합니다."},
 {"Fast Egg", "빠른 알"},
 {"First drop in the Wind Fish Egg drops you to the boss.", "성스러운 알에서 처음 떨어지면 바로 보스에게 갑니다."},
+{"Starting Instruments", "시작 악기"},
+{"How many instruments you start with.", "처음부터 가지고 시작하는 악기 수입니다."},
 {"Triforce hunt", "트라이포스 찾기"},
 {"Collect Triforce pieces to win. The last one you need rolls the credits, no Wind Fish required.", "트라이포스 조각을 모으면 승리합니다. 마지막 조각을 얻으면 바람의 물고기 없이 바로 엔딩이 나옵니다."},
 {"Pieces needed", "필요한 조각"},

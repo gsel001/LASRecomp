@@ -641,6 +641,8 @@
 {"The overworld map marks the checks you have and haven't done yet.", "Die Oberweltkarte markiert, welche Checks du schon erledigt hast und welche nicht."},
 {"Fast Egg", "Schnelles Ei"},
 {"First drop in the Wind Fish Egg drops you to the boss.", "Der erste Sprung im Windfisch-Ei bringt dich direkt zum Boss."},
+{"Starting Instruments", "Start-Instrumente"},
+{"How many instruments you start with.", "Wie viele Instrumente du zu Beginn hast."},
 {"Triforce hunt", "Triforce-Jagd"},
 {"Collect Triforce pieces to win. The last one you need rolls the credits, no Wind Fish required.", "Sammle Triforce-Teile, um zu gewinnen. Das letzte nötige Teil startet den Abspann, ganz ohne Windfisch."},
 {"Pieces needed", "Nötige Teile"},

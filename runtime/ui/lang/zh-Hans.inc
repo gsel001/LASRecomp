@@ -641,6 +641,8 @@
 {"The overworld map marks the checks you have and haven't done yet.", "野外地图会标出已完成和未完成的检查点。"},
 {"Fast Egg", "快速圣蛋"},
 {"First drop in the Wind Fish Egg drops you to the boss.", "在圣蛋中第一次掉落就会直接到达首领处。"},
+{"Starting Instruments", "初始乐器"},
+{"How many instruments you start with.", "开局时拥有的乐器数量。"},
 {"Triforce hunt", "三角力量搜集"},
 {"Collect Triforce pieces to win. The last one you need rolls the credits, no Wind Fish required.", "收集三角力量碎片即可获胜。拿到最后一块就会播放制作人员名单，无需唤醒风鱼。"},
 {"Pieces needed", "所需碎片"},
