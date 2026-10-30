@@ -10,6 +10,7 @@
 #include <strings.h>
 
 #include "imgui.h"
+#include "i18n.h"
 #include "osk.h"
 #include "item_names.h"
 #include "option_rows.h"
@@ -191,7 +192,7 @@ static void sec_player(void) {
     if (opt_int("Golden Leaves", &leaves, 0, 5, 1, 0, "%d / 5", "Golden Leaves for Richard."))
         F<uint8_t>(LEAVES) = (uint8_t)low_bits(leaves);
     {
-        static const char *const tunics[] = {"Green", "Red", "Blue", "Red + Blue"};
+        static const char *const tunics[] = {LN("Green"), LN("Red"), LN("Blue"), LN("Red + Blue")};
         int t = (F<uint8_t>(UPGRADES) >> 6) & 3;
         if (opt_choice("Tunics", &t, tunics, 4, 0, "The Color Dungeon tunics. Red doubles Link's attack and Blue halves "
                                                    "the damage he takes."))
@@ -200,36 +201,36 @@ static void sec_player(void) {
 }
 
 static void sec_equipment(void) {
-    static const char *const sword[] = {"None", "Sword", "Level 2"};
-    static const char *const shield[] = {"None", "Shield", "Mirror Shield"};
-    static const char *const bracelet[] = {"None", "Power Bracelet", "Level 2"};
+    static const char *const sword[] = {LN("None"), LN("Sword"), LN("Level 2")};
+    static const char *const shield[] = {LN("None"), LN("Shield"), LN("Mirror Shield")};
+    static const char *const bracelet[] = {LN("None"), LN("Power Bracelet"), LN("Level 2")};
     level("Sword", 0, 0, 0, sword, "Link's sword. Level 2 is the Noble Sword from the Seashell Mansion.");
     level("Shield", 1, 1, 2, shield, "Link's shield. The Mirror Shield blocks beams and fire.");
     level("Power Bracelet", 10, 2, 13, bracelet, "Lifts pots and rocks. Level 2 lifts the heavy ones.");
     static const Bit items[] = {
-        {"Bombs", ITEMS, 2, 32, "The bomb bag.", 4},
-        {"Bow", ITEMS, 3, 32, "The bow.", 5},
-        {"Hookshot", ITEMS, 4, 32, "The Hookshot.", 6},
-        {"Boomerang", ITEMS, 5, 32, "The Boomerang.", 7},
-        {"Magic Rod", ITEMS, 6, 32, "The Magic Rod.", 8},
-        {"Shovel", ITEMS, 7, 32, "The Shovel.", 9},
-        {"Magic Powder", ITEMS, 8, 32, "Magic Powder.", 11},
-        {"Roc's Feather", ITEMS, 9, 32, "Lets Link jump.", 12},
-        {"Pegasus Boots", ITEMS, 11, 32, "Lets Link dash.", 15},
-        {"Ocarina", ITEMS, 12, 32, "The Ocarina. Songs are under Ocarina songs.", 16},
-        {"Flippers", KEYITEMS, 0, 32, "Lets Link swim and dive.", 20},
-        {"Secret Medicine", KEYITEMS, 1, 32, "Revives Link once when his health runs out.", 21},
-        {"Sleepy Toadstool", KEYITEMS, 15, 32, "The Sleepy Toadstool for the witch.", 10},
-        {"Seashell Sensor", SENSOR, 0, 8, "Chimes when you're near a hidden Secret Seashell."},
+        {LN("Bombs"), ITEMS, 2, 32, LN("The bomb bag."), 4},
+        {LN("Bow"), ITEMS, 3, 32, LN("The bow."), 5},
+        {LN("Hookshot"), ITEMS, 4, 32, LN("The Hookshot."), 6},
+        {LN("Boomerang"), ITEMS, 5, 32, LN("The Boomerang."), 7},
+        {LN("Magic Rod"), ITEMS, 6, 32, LN("The Magic Rod."), 8},
+        {LN("Shovel"), ITEMS, 7, 32, LN("The Shovel."), 9},
+        {LN("Magic Powder"), ITEMS, 8, 32, LN("Magic Powder."), 11},
+        {LN("Roc's Feather"), ITEMS, 9, 32, LN("Lets Link jump."), 12},
+        {LN("Pegasus Boots"), ITEMS, 11, 32, LN("Lets Link dash."), 15},
+        {LN("Ocarina"), ITEMS, 12, 32, LN("The Ocarina. Songs are under Ocarina songs."), 16},
+        {LN("Flippers"), KEYITEMS, 0, 32, LN("Lets Link swim and dive."), 20},
+        {LN("Secret Medicine"), KEYITEMS, 1, 32, LN("Revives Link once when his health runs out."), 21},
+        {LN("Sleepy Toadstool"), KEYITEMS, 15, 32, LN("The Sleepy Toadstool for the witch."), 10},
+        {LN("Seashell Sensor"), SENSOR, 0, 8, LN("Chimes when you're near a hidden Secret Seashell.")},
     };
     bit_rows(items, sizeof items / sizeof items[0]);
 }
 
 static void sec_ammo(void) {
     static const Bit ups[] = {
-        {"Bomb bag upgrade", UPGRADES, 4, 8, "Carry up to 60 bombs instead of 30."},
-        {"Quiver upgrade", UPGRADES, 5, 8, "Carry up to 60 arrows instead of 30."},
-        {"Magic Powder upgrade", UPGRADES, 3, 8, "Carry up to 40 Magic Powder instead of 20."},
+        {LN("Bomb bag upgrade"), UPGRADES, 4, 8, LN("Carry up to 60 bombs instead of 30.")},
+        {LN("Quiver upgrade"), UPGRADES, 5, 8, LN("Carry up to 60 arrows instead of 30.")},
+        {LN("Magic Powder upgrade"), UPGRADES, 3, 8, LN("Carry up to 40 Magic Powder instead of 20.")},
     };
     bit_rows(ups, 3);
     ammo("Bombs", BOMBS, 4, 30, "Bombs carried.");
@@ -239,18 +240,21 @@ static void sec_ammo(void) {
 
 static void sec_songs(void) {
     static const Bit songs[] = {
-        {"Ballad of the Wind Fish", SONGS, 0, 8, "Marin's song."},
-        {"Manbo's Mambo", SONGS, 1, 8, "Warps to Manbo's Pond or a warp point."},
-        {"Frog's Song of Soul", SONGS, 2, 8, "Brings some things back to life."},
+        {LN("Ballad of the Wind Fish"), SONGS, 0, 8, LN("Marin's song.")},
+        {LN("Manbo's Mambo"), SONGS, 1, 8, LN("Warps to Manbo's Pond or a warp point.")},
+        {LN("Frog's Song of Soul"), SONGS, 2, 8, LN("Brings some things back to life.")},
     };
     bit_rows(songs, 3);
 }
 
 static void sec_bottles(void) {
     static const Bit bottles[] = {
-        {"Bottle 1", ITEMS, 13, 32, "An empty bottle."}, {"Fairy in bottle 1", FAIRIES, 0, 8, "A fairy in bottle 1."},
-        {"Bottle 2", ITEMS, 14, 32, "An empty bottle."}, {"Fairy in bottle 2", FAIRIES, 1, 8, "A fairy in bottle 2."},
-        {"Bottle 3", ITEMS, 15, 32, "An empty bottle."}, {"Fairy in bottle 3", FAIRIES, 2, 8, "A fairy in bottle 3."},
+        {LN("Bottle 1"), ITEMS, 13, 32, LN("An empty bottle.")},
+        {LN("Fairy in bottle 1"), FAIRIES, 0, 8, LN("A fairy in bottle 1.")},
+        {LN("Bottle 2"), ITEMS, 14, 32, LN("An empty bottle.")},
+        {LN("Fairy in bottle 2"), FAIRIES, 1, 8, LN("A fairy in bottle 2.")},
+        {LN("Bottle 3"), ITEMS, 15, 32, LN("An empty bottle.")},
+        {LN("Fairy in bottle 3"), FAIRIES, 2, 8, LN("A fairy in bottle 3.")},
     };
     bit_rows(bottles, 6);
 }
@@ -258,22 +262,23 @@ static void sec_bottles(void) {
 static void sec_instruments(void) {
     if (opt_button("All instruments", "Gives all eight instruments.")) F<uint32_t>(KEYITEMS) |= 0x7F80;
     static const Bit inst[] = {
-        {"Full Moon Cello", KEYITEMS, 7, 32, "Tail Cave's instrument."},
-        {"Conch Horn", KEYITEMS, 8, 32, "Bottle Grotto's instrument."},
-        {"Sea Lily's Bell", KEYITEMS, 9, 32, "Key Cavern's instrument."},
-        {"Surf Harp", KEYITEMS, 10, 32, "Angler's Tunnel's instrument."},
-        {"Wind Marimba", KEYITEMS, 11, 32, "Catfish's Maw's instrument."},
-        {"Coral Triangle", KEYITEMS, 12, 32, "Face Shrine's instrument."},
-        {"Evening Calm Organ", KEYITEMS, 13, 32, "Eagle's Tower's instrument."},
-        {"Thunder Drum", KEYITEMS, 14, 32, "Turtle Rock's instrument."},
+        {LN("Full Moon Cello"), KEYITEMS, 7, 32, LN("Tail Cave's instrument.")},
+        {LN("Conch Horn"), KEYITEMS, 8, 32, LN("Bottle Grotto's instrument.")},
+        {LN("Sea Lily's Bell"), KEYITEMS, 9, 32, LN("Key Cavern's instrument.")},
+        {LN("Surf Harp"), KEYITEMS, 10, 32, LN("Angler's Tunnel's instrument.")},
+        {LN("Wind Marimba"), KEYITEMS, 11, 32, LN("Catfish's Maw's instrument.")},
+        {LN("Coral Triangle"), KEYITEMS, 12, 32, LN("Face Shrine's instrument.")},
+        {LN("Evening Calm Organ"), KEYITEMS, 13, 32, LN("Eagle's Tower's instrument.")},
+        {LN("Thunder Drum"), KEYITEMS, 14, 32, LN("Turtle Rock's instrument.")},
     };
     bit_rows(inst, 8);
 }
 
 // Per-dungeon records (notes/save_format.md): live save + 0xE0 + 0x10 * rec, dungeon n -> rec 2(n-1), Color Dungeon
 // -> 18 (as runtime/hle/keysanity.c); +0 small keys, +1 bits: compass 0, map 1, beak 2, Nightmare Key 3.
-static const char *const k_dungeons[] = {"Tail Cave", "Bottle Grotto", "Key Cavern", "Angler's Tunnel", "Catfish's Maw",
-                                         "Face Shrine", "Eagle's Tower", "Turtle Rock", "Color Dungeon"};
+static const char *const k_dungeons[] = {LN("Tail Cave"), LN("Bottle Grotto"), LN("Key Cavern"), LN("Angler's Tunnel"),
+                                         LN("Catfish's Maw"), LN("Face Shrine"), LN("Eagle's Tower"), LN("Turtle Rock"),
+                                         LN("Color Dungeon")};
 static uint32_t dungeon_rec(int d) { return 0xE0 + 0x10 * (d == 8 ? 18 : 2 * d); }
 
 static int current_dungeon(void) {  // the dungeon Link is in: Lv01TailCave..Lv08TurtleRock 0-7, Lv10ClothesDungeon 8; else -1
@@ -289,21 +294,21 @@ static void dungeon_rows(int d) {
     if (keys > 9) keys = 9;
     if (opt_int("Small Keys", &keys, 0, 9, 1, 0, "%d", "Small Keys held.")) F<uint8_t>(r) = (uint8_t)keys;
     const Bit bits[] = {
-        {"Nightmare Key", r + 1, 3, 8, "Opens the boss door."},
-        {"Dungeon Map", r + 1, 1, 8, "The dungeon map."},
-        {"Compass", r + 1, 0, 8, "The compass."},
-        {"Stone Beak", r + 1, 2, 8, "Lets the owl statues give hints."},
+        {LN("Nightmare Key"), r + 1, 3, 8, LN("Opens the boss door.")},
+        {LN("Dungeon Map"), r + 1, 1, 8, LN("The dungeon map.")},
+        {LN("Compass"), r + 1, 0, 8, LN("The compass.")},
+        {LN("Stone Beak"), r + 1, 2, 8, LN("Lets the owl statues give hints.")},
     };
     bit_rows(bits, 4);
 }
 
 static void sec_keys(void) {
     static const Bit keys[] = {
-        {"Tail Key", KEYITEMS, 2, 32, "Opens Tail Cave."},
-        {"Slime Key", KEYITEMS, 3, 32, "Opens Key Cavern."},
-        {"Angler Key", KEYITEMS, 4, 32, "Opens Angler's Tunnel."},
-        {"Face Key", KEYITEMS, 5, 32, "Opens Face Shrine."},
-        {"Bird Key", KEYITEMS, 6, 32, "Opens Eagle's Tower."},
+        {LN("Tail Key"), KEYITEMS, 2, 32, LN("Opens Tail Cave.")},
+        {LN("Slime Key"), KEYITEMS, 3, 32, LN("Opens Key Cavern.")},
+        {LN("Angler Key"), KEYITEMS, 4, 32, LN("Opens Angler's Tunnel.")},
+        {LN("Face Key"), KEYITEMS, 5, 32, LN("Opens Face Shrine.")},
+        {LN("Bird Key"), KEYITEMS, 6, 32, LN("Opens Eagle's Tower.")},
     };
     {   // (the game's own pickup, as from a chest: in the dungeon Link is in)
         bool in = current_dungeon() >= 0;
@@ -319,9 +324,10 @@ static void sec_keys(void) {
 
 static void sec_trade(void) {
     {
-        static const char *const trade[] = {"None", "Yoshi Doll", "Ribbon", "Dog Food", "Bananas", "Stick", "Honeycomb",
-                                            "Pineapple", "Hibiscus", "Goat's Letter", "Broom", "Fishing Hook", "Necklace",
-                                            "Mermaid's Scale", "Magnifying Lens"};
+        static const char *const trade[] = {LN("None"), LN("Yoshi Doll"), LN("Ribbon"), LN("Dog Food"), LN("Bananas"),
+                                            LN("Stick"), LN("Honeycomb"), LN("Pineapple"), LN("Hibiscus"),
+                                            LN("Goat's Letter"), LN("Broom"), LN("Fishing Hook"), LN("Necklace"),
+                                            LN("Mermaid's Scale"), LN("Magnifying Lens")};
         int t = F<uint8_t>(TRADE);
         if (t > 14) t = 0;
         if (opt_choice("Trade item", &t, trade, 15, 0, "The trading quest item Link is carrying.")) F<uint8_t>(TRADE) = (uint8_t)t;
@@ -329,7 +335,8 @@ static void sec_trade(void) {
 }
 
 static void sec_companions(void) {
-    static const struct { int c; const char *name; } comps[] = {{1, "BowWow"}, {2, "Marin"}, {4, "Flying Rooster"}, {3, "Ghost"}};
+    static const struct { int c; const char *name; } comps[] = {{1, LN("BowWow")}, {2, LN("Marin")},
+                                                                  {4, LN("Flying Rooster")}, {3, LN("Ghost")}};
     for (const auto &k : comps) {
         bool on = pets_owned(k.c);
         if (opt_toggle(k.name, &on, false, "Companions are items in this seed. Turn one on and it follows Link."))
@@ -363,9 +370,10 @@ static void sec_give(void) {
 // on the right, the selected row's description under them.
 enum { SEC_QUICK, SEC_PLAYER, SEC_EQUIPMENT, SEC_AMMO, SEC_SONGS, SEC_BOTTLES, SEC_INSTRUMENTS, SEC_KEYS, SEC_TRADE,
        SEC_COMPANIONS, SEC_GIVE, N_SEC };
-static const char *const k_sec_name[N_SEC] = {"Quick", "Player", "Equipment", "Ammo", "Ocarina songs", "Bottles",
-                                              "Siren Instruments", "Dungeon keys", "Trading quest", "Companions",
-                                              "Give any item"};
+static const char *const k_sec_name[N_SEC] = {LN("Quick"), LN("Player"), LN("Equipment"), LN("Ammo"),
+                                              LN("Ocarina songs"), LN("Bottles"), LN("Siren Instruments"),
+                                              LN("Dungeon keys"), LN("Trading quest"), LN("Companions"),
+                                              LN("Give any item")};
 static void (*const k_sec_rows[N_SEC])(void) = {sec_quick, sec_player, sec_equipment, sec_ammo, sec_songs, sec_bottles,
                                                 sec_instruments, sec_keys, sec_trade, sec_companions, sec_give};
 static bool sec_shown(int c) { return c != SEC_COMPANIONS || rando_seed_dir(); }  // (randomizer seeds: companions are items)
@@ -393,6 +401,9 @@ extern "C" void save_editor_draw(float scale) {
         }
     }
     if (hook_frames > 0) hook_frames--, g_focus = FOCUS_RIGHT;
+    static const int sec_cycle = getenv("LARECOMP_SAVE_SEC_CYCLE") ? atoi(getenv("LARECOMP_SAVE_SEC_CYCLE")) : 0;
+    static int sec_frames;  // (test) <frames>: each section in turn, that many frames each (screenshot series)
+    if (sec_cycle > 0 && sec_frames++ % sec_cycle == 0) g_sec = sec_frames / sec_cycle % N_SEC;
     if (!sec_shown(g_sec)) g_sec = SEC_QUICK;
     // B / Esc in the right column (and Left on a row that doesn't step with it): back to the section
     if (g_in_right && !ui_text_busy() && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) &&

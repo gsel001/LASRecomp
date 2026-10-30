@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "imgui.h"
+#include "i18n.h"
 #include "option_rows.h"
 
 extern "C" {
@@ -54,14 +55,18 @@ extern "C" void difficulty_draw(float scale) {
     opt_begin("##gameplay", scale);
     opt_section("General");
     {
-        // what the game is told the console's language is: its text follows this (runtime/settings.c)
+        // what the game is told the console's language is: its text follows this (runtime/settings.c), and the menus
+        // at once. Each language by its own name (the row leaves names it has no translation for as they are).
+        const char *code = settings_language(), *auto_name = "English";
+        for (int i = 1; i < N_LANGUAGES; i++)
+            if (!strcmp(code, g_language_codes[i])) auto_name = g_language_endonyms[i];
         char autol[64];
-        snprintf(autol, sizeof autol, "Auto (%s)", settings_language_name());
+        snprintf(autol, sizeof autol, L("Auto (%s)"), auto_name);
         const char *names[N_LANGUAGES];
         names[0] = autol;
-        for (int i = 1; i < N_LANGUAGES; i++) names[i] = g_language_names[i];
+        for (int i = 1; i < N_LANGUAGES; i++) names[i] = g_language_endonyms[i];
         if (opt_choice("Language", &g_settings.language, names, N_LANGUAGES, LANG_AUTO,
-                       "The game's text language. Changes after a restart."))
+                       "The language of the menus and the game's text. The game's text changes after a restart."))
             settings_save();
     }
     if (rt_hookshot_seed_forced()) {  // (the seed's logic counts on it: always on, the toggle greyed out)
@@ -84,7 +89,7 @@ extern "C" void difficulty_draw(float scale) {
                    "Mirrors the game world."))
         settings_save();
     {
-        static const char *const names[] = {"Normal", "Brisk", "Running", "Sprinting", "Zoomies"};
+        static const char *const names[] = {LN("Normal"), LN("Brisk"), LN("Running"), LN("Sprinting"), LN("Zoomies")};
         static const float mult[] = {1, 1.25f, 1.5f, 1.75f, 2.5f};
         int wi = 0;  // (the closest step to the setting)
         for (int i = 0; i < 5; i++)
@@ -101,7 +106,8 @@ extern "C" void difficulty_draw(float scale) {
         opt_indent(-1);
     }
     opt_section("Difficulty");
-    static const char *const names[] = {"Half", "Default", "2x", "3x", "4x", "5x", "6x", "7x", "8x"};
+    static const char *const names[] = {LN("Half"), LN("Default"), LN("2x"), LN("3x"), LN("4x"), LN("5x"),
+                                         LN("6x"), LN("7x"), LN("8x")};
     static const float mult[] = {0.5f, 1, 2, 3, 4, 5, 6, 7, 8};
     int di = 1;  // (the closest step to the setting: older files may hold any multiplier)
     for (int i = 0; i < 9; i++)
@@ -126,7 +132,7 @@ extern "C" void difficulty_draw(float scale) {
         settings_save();
     opt_indent(1);
     {  // (any time, also mid-session)
-        static const char *const pos[] = {"Bottom left", "Bottom right"};
+        static const char *const pos[] = {LN("Bottom left"), LN("Bottom right")};
         if (!g_settings.timer) opt_disable_next();
         if (opt_choice("Timer position", &g_settings.timer_pos, pos, 2, TIMER_POS_LEFT, "Which corner the timer sits in."))
             settings_save();
@@ -140,9 +146,10 @@ extern "C" void difficulty_draw(float scale) {
     }
     opt_indent(1);
     {
-        char d[160];
-        snprintf(d, sizeof d, "The address LiveSplit's Server listens on, written as host:port.%s",
-                 !g_settings.livesplit ? "" : livesplit_connected() ? "\n\nConnected." : "\n\nNot connected.");
+        char d[512];  // (in the menus' language already: the row leaves it as it is)
+        snprintf(d, sizeof d, "%s%s%s", L("The address LiveSplit's Server listens on, written as host:port."),
+                 g_settings.livesplit ? "\n\n" : "",
+                 !g_settings.livesplit ? "" : livesplit_connected() ? L("Connected.") : L("Not connected."));
         if (!g_settings.livesplit) opt_disable_next();
         if (opt_text("Server", g_settings.livesplit_host, sizeof g_settings.livesplit_host, "localhost:16834", d)) {
             if (!g_settings.livesplit_host[0]) snprintf(g_settings.livesplit_host, sizeof g_settings.livesplit_host, "localhost:16834");

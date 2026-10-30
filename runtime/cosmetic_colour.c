@@ -8,8 +8,11 @@
 #include <strings.h>
 #include <time.h>
 
-const char *const g_col_names[N_COL] = {"Default", "Red",   "Orange", "Gold",  "Brown",  "Green",  "Teal", "Blue",
-                                        "Purple",  "Pink",  "White",  "Black", "Silver", "Random", "Custom"};
+#include "i18n_mark.h"
+
+const char *const g_col_names[N_COL] = {LN("Default"), LN("Red"),   LN("Orange"), LN("Gold"),   LN("Brown"),
+                                        LN("Green"),   LN("Teal"),  LN("Blue"),   LN("Purple"), LN("Pink"),
+                                        LN("White"),   LN("Black"), LN("Silver"), LN("Random"), LN("Custom")};
 const uint32_t g_col_rgb[N_COL] = {0,        0xD63A3A, 0xF08A24, 0xE8B830, 0x7A4A28, 0x3FA34D, 0x22A7A0, 0x2F6FD6,
                                    0x8A4FD8, 0xE86AA8, 0xF2F0EA, 0x2A2A2E, 0xA9B0B8, 0,        0};
 
