@@ -61,26 +61,24 @@ extern "C" void difficulty_draw(float scale) {
         names[0] = autol;
         for (int i = 1; i < N_LANGUAGES; i++) names[i] = g_language_names[i];
         if (opt_choice("Language", &g_settings.language, names, N_LANGUAGES, LANG_AUTO,
-                       "The game's text language, as its own system setting. Applies when the game restarts."))
+                       "The game's text language. Changes after a restart."))
             settings_save();
     }
     if (rt_hookshot_seed_forced()) {  // (the seed's logic counts on it: always on, the toggle greyed out)
         bool on = true;
         opt_disable_next();
         opt_toggle("Hookshot anything", &on, false,
-                   "On: this randomizer seed was made with Hookshot Anything, and its logic counts on it.");
+                   "This seed was made with Hookshot Anything, so it stays on.");
     } else if (opt_toggle("Hookshot anything", &g_settings.cheat_hookshot, false,
-                          "The hookshot latches onto any wall or object, not only its targets. Randomizer seeds made "
-                          "with Hookshot Anything always have it on."))
+                          "The Hookshot latches onto any wall or object, not just Hookshot targets."))
         settings_save();
     if (rt_no_buff_seed_forced()) {
         bool on = true;
         opt_disable_next();
-        opt_toggle("No Guardian Acorns / Pieces of Power", &on, false,
-                   "On: this randomizer seed was made with it.");
-    } else if (opt_toggle("No Guardian Acorns / Pieces of Power", &g_settings.no_buff_drops, false,
-                          "Defeating enemies in a row never drops a Guardian Acorn or a Piece of Power. Randomizer seeds "
-                          "made with this option always have it on."))
+        opt_toggle("Disable Guardian Acorns / Pieces of Power", &on, false,
+                   "This seed was made with it, so it stays on.");
+    } else if (opt_toggle("Disable Guardian Acorns / Pieces of Power", &g_settings.no_buff_drops, false,
+                          "Disables Guardian Acorns and Pieces of Power from spawning."))
         settings_save();
     if (opt_toggle("Mirror mode", &g_settings.mirror_mode, false,
                    "Mirrors the game world."))
@@ -91,13 +89,14 @@ extern "C" void difficulty_draw(float scale) {
         int wi = 0;  // (the closest step to the setting)
         for (int i = 0; i < 5; i++)
             if (fabsf(mult[i] - g_settings.walk_speed) < fabsf(mult[wi] - g_settings.walk_speed)) wi = i;
-        if (opt_choice("Walk speed", &wi, names, 5, 0, "How fast Link walks. The Pegasus Boots and swimming are unchanged.")) {
+        if (opt_choice("Walk speed", &wi, names, 5, 0, "How fast Link walks. Doesn't change the Pegasus Boots or swimming.")) {
             g_settings.walk_speed = mult[wi];
             settings_save();
         }
         opt_indent(1);
         if (wi == 0) opt_disable_next();
-        if (opt_toggle("Indoors", &g_settings.walk_speed_dungeons, false, "Also in houses, caves and dungeons. Off: normal speed there."))
+        if (opt_toggle("Indoors", &g_settings.walk_speed_dungeons, false,
+                       "Use the walk speed in houses, caves and dungeons too."))
             settings_save();
         opt_indent(-1);
     }
@@ -108,11 +107,11 @@ extern "C" void difficulty_draw(float scale) {
     for (int i = 0; i < 9; i++)
         if (fabsf(mult[i] - g_settings.diff_damage) < fabsf(mult[di] - g_settings.diff_damage)) di = i;
     if (opt_choice("Damage taken", &di, names, 9, 1,
-                   "How much damage Link takes from every hit: half, the game's own, or up to eight times as much.")) {
+                   "How much damage each hit does, from half up to eight times normal.")) {
         g_settings.diff_damage = mult[di];
         settings_save();
     }
-    if (opt_toggle("One-hit KO", &g_settings.diff_ohko, false, "Any hit defeats Link, whatever his hearts."))
+    if (opt_toggle("One-hit KO", &g_settings.diff_ohko, false, "One hit and Link is down, no matter how many hearts he has."))
         settings_save();
 
     // run timer / LiveSplit (runtime/hle/run_timer.c, runtime/livesplit.c, runtime/ui/race_overlay.mm)
@@ -122,8 +121,8 @@ extern "C" void difficulty_draw(float scale) {
     bool locked = game_in_play();
     if (locked) opt_disable_next();
     if (opt_toggle("Timer", &g_settings.timer, false,
-                   locked ? "Set before starting a save."
-                          : "A run timer in the corner: real time from the start of gameplay to the ending."))
+                   locked ? "Turn this on before you load a save."
+                          : "Shows a run timer in the corner, from the start of gameplay to the ending."))
         settings_save();
     opt_indent(1);
     {  // (any time, also mid-session)
@@ -134,15 +133,15 @@ extern "C" void difficulty_draw(float scale) {
     }
     opt_indent(-1);
     if (opt_toggle("LiveSplit", &g_settings.livesplit, false,
-                   "Drives LiveSplit through its Server component: the start, a split for each instrument and the "
-                   "ending, and game time without loading.")) {
+                   "Connects to LiveSplit's Server component. It starts the timer, splits on each instrument and stops "
+                   "at the ending, with load times removed.")) {
         settings_save();
         livesplit_poke();
     }
     opt_indent(1);
     {
         char d[160];
-        snprintf(d, sizeof d, "Where LiveSplit's Server listens: host:port.%s",
+        snprintf(d, sizeof d, "The address LiveSplit's Server listens on, written as host:port.%s",
                  !g_settings.livesplit ? "" : livesplit_connected() ? "\n\nConnected." : "\n\nNot connected.");
         if (!g_settings.livesplit) opt_disable_next();
         if (opt_text("Server", g_settings.livesplit_host, sizeof g_settings.livesplit_host, "localhost:16834", d)) {

@@ -349,7 +349,7 @@ bool opt_colour(const char *label, CosColour *c, int slot, const char *desc) {
     char hex[16];
     snprintf(hex, sizeof hex, "#%06X", (unsigned)(c->rgb & 0xFFFFFF));
     opt_indent(1);
-    bool open = opt_action("Custom color", hex, "Any color: pick its hue, saturation and brightness.", true, true);
+    bool open = opt_action("Custom color", hex, "Pick any color by hue, saturation and brightness.", true, true);
     opt_indent(-1);
     ImVec2 mn = ImGui::GetItemRectMin(), mx = ImGui::GetItemRectMax();
     {   // a swatch of it, left of the value

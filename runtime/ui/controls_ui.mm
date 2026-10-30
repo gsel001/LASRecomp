@@ -122,7 +122,7 @@ static void watch_results(int fam, char *msg, size_t cap) {
     seen = serial;
     msg[0] = 0;
     if (kind == 2)
-        snprintf(msg, cap, "%s moved to %s (swapped).", bind_input_name(rother),
+        snprintf(msg, cap, "Swapped. %s is on %s now.", bind_input_name(rother),
                  rdev == BIND_DEV_PAD ? bind_pad_label(g_bind_pad[rother], fam) : bind_key_label(g_bind_key[rother]));
     if (kind == 1 || kind == 2 || kind == 5) settings_save();
 }
@@ -252,8 +252,8 @@ extern "C" void controls_tab_draw(float scale) {
 
     opt_begin("##controls", scale);
     opt_section("Inputs");
-    if (opt_link("Configure inputs", "Choose the buttons and keys for the game. The menu always opens with F1, Esc, "
-                                     "Home or Back + Start, so no binding can lock you out.")) {
+    if (opt_link("Configure inputs", "Set the buttons and keys for the game. F1, Esc, Home or Back + Start always "
+                                     "open this menu.")) {
         pick_device(keyboard_pressed());
         g_sub = true, g_focus = FOCUS_DEVICE, g_in_right = false;
     }
@@ -264,7 +264,7 @@ extern "C" void controls_tab_draw(float scale) {
         input_apply_background();
 
     opt_section("Movement");
-    opt_toggle("D-pad moves Link", &g_settings.dpad_move, false, "The d-pad moves Link like the control stick.");
+    opt_toggle("D-pad moves Link", &g_settings.dpad_move, false, "Move Link with the D-pad as well as the stick.");
     opt_toggle("360-degree movement", &g_settings.move_360, false,
                "Link walks in the exact direction of the stick instead of snapping to 8 directions.");
 
@@ -286,12 +286,13 @@ extern "C" void controls_tab_draw(float scale) {
         snprintf(autol, sizeof autol, "Auto (%s)", fam[input_pad_family() % 3]);
         const char *names[] = {autol, "Nintendo", "Xbox", "PlayStation"};
         opt_choice("Button icons", &g_settings.prompts, names, 4, PROMPTS_AUTO,
-                   "The button icons the game shows. Auto: the connected controller's.");
+                   "Which button icons the game shows. Auto matches the controller you have plugged in.");
     }
     {
-        static const char *const names[] = {"Game layout", "Controller convention"};
+        static const char *const names[] = {"Nintendo layout", "Bottom button"};
         opt_choice("Confirm button", &g_settings.menu_confirm, names, 2, MENU_CONFIRM_CONTROLLER,
-                   "Which button confirms in LAS Recomp's menus.");
+                   "Which button confirms in LAS Recomp's menus. Nintendo layout uses the right button like the Switch, "
+                   "Bottom button uses the bottom one like Xbox and PlayStation.");
     }
 
     opt_end();

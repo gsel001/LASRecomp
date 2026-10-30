@@ -148,7 +148,8 @@ static void sec_quick(void) {
         max_out();
         hud_hearts_refresh();
     }
-    if (opt_button("Refill hearts & ammo", "Refills health, and the bombs, arrows and Magic Powder Link owns.")) {
+    if (opt_button("Refill hearts & ammo",
+                   "Refills your health, bombs, arrows and Magic Powder, for any bag you already have.")) {
         F<int16_t>(HP) = (int16_t)max_hp();
         if (F<uint32_t>(ITEMS) & (1u << 2)) F<uint8_t>(BOMBS) = (F<uint8_t>(UPGRADES) & 0x10) ? 60 : 30;
         if (F<uint32_t>(ITEMS) & (1u << 3)) F<uint8_t>(ARROWS) = (F<uint8_t>(UPGRADES) & 0x20) ? 60 : 30;
@@ -157,13 +158,13 @@ static void sec_quick(void) {
 }
 
 static void sec_player(void) {
-    if (opt_text("Name", g_name, 9 * 3, NULL, "The save file's name (up to 8 letters).")) write_name(g_name);
+    if (opt_text("Name", g_name, 9 * 3, NULL, "The save file's name, up to 8 letters.")) write_name(g_name);
     bool max_changed = false;
     int containers = __builtin_popcount(F<uint16_t>(CONTAINERS) & 0x1FF);
     int pieces = __builtin_popcountll(F<uint64_t>(PIECES) & 0xFFFFFFFFull);
     int hearts = 3 + containers + pieces / 4;
     if (opt_int("Heart Containers", &hearts, 3, 20, 1, 3, "%d / 20",
-                "Link's maximum hearts: Heart Containers first, then Pieces of Heart.")) {
+                "Link's max hearts. Heart Containers fill up first, then Pieces of Heart.")) {
         containers = hearts - 3 < 9 ? hearts - 3 : 9;
         pieces = (hearts - 3 - containers) * 4 + (hearts < 20 ? pieces % 4 : 0);  // (keeps a heart's loose pieces)
         F<uint16_t>(CONTAINERS) = (uint16_t)low_bits(containers);
@@ -180,7 +181,8 @@ static void sec_player(void) {
             F<int16_t>(HP) = (int16_t)fmaxf(1, roundf(hearts * 4));
     }
     int rupees = (int)F<uint32_t>(RUPEES);
-    if (opt_int("Rupees", &rupees, 0, 9999, 1, 0, "%d", "Rupees in Link's wallet (up to 9999).\n\nHold left / right to go faster."))
+    if (opt_int("Rupees", &rupees, 0, 9999, 1, 0, "%d",
+                "Rupees in Link's wallet, up to 9999. Hold left or right to go faster."))
         F<uint32_t>(RUPEES) = (uint32_t)rupees;
     int shells = __builtin_popcountll(F<uint64_t>(SHELLS) & low_bits(50));
     if (opt_int("Secret Seashells", &shells, 0, 50, 1, 0, "%d / 50", "Secret Seashells collected."))
@@ -191,8 +193,8 @@ static void sec_player(void) {
     {
         static const char *const tunics[] = {"Green", "Red", "Blue", "Red + Blue"};
         int t = (F<uint8_t>(UPGRADES) >> 6) & 3;
-        if (opt_choice("Tunics", &t, tunics, 4, 0, "The tunics from the Color Dungeon: red doubles Link's attack, blue "
-                                                   "halves the damage he takes."))
+        if (opt_choice("Tunics", &t, tunics, 4, 0, "The Color Dungeon tunics. Red doubles Link's attack and Blue halves "
+                                                   "the damage he takes."))
             F<uint8_t>(UPGRADES) = (uint8_t)((F<uint8_t>(UPGRADES) & 0x3F) | (t << 6));
     }
 }
@@ -205,20 +207,20 @@ static void sec_equipment(void) {
     level("Shield", 1, 1, 2, shield, "Link's shield. The Mirror Shield blocks beams and fire.");
     level("Power Bracelet", 10, 2, 13, bracelet, "Lifts pots and rocks. Level 2 lifts the heavy ones.");
     static const Bit items[] = {
-        {"Bombs", ITEMS, 2, 32, "The bombs item (bomb bag).", 4},
+        {"Bombs", ITEMS, 2, 32, "The bomb bag.", 4},
         {"Bow", ITEMS, 3, 32, "The bow.", 5},
         {"Hookshot", ITEMS, 4, 32, "The Hookshot.", 6},
         {"Boomerang", ITEMS, 5, 32, "The Boomerang.", 7},
         {"Magic Rod", ITEMS, 6, 32, "The Magic Rod.", 8},
         {"Shovel", ITEMS, 7, 32, "The Shovel.", 9},
         {"Magic Powder", ITEMS, 8, 32, "Magic Powder.", 11},
-        {"Roc's Feather", ITEMS, 9, 32, "Roc's Feather: jump.", 12},
-        {"Pegasus Boots", ITEMS, 11, 32, "Pegasus Boots: dash.", 15},
+        {"Roc's Feather", ITEMS, 9, 32, "Lets Link jump.", 12},
+        {"Pegasus Boots", ITEMS, 11, 32, "Lets Link dash.", 15},
         {"Ocarina", ITEMS, 12, 32, "The Ocarina. Songs are under Ocarina songs.", 16},
-        {"Flippers", KEYITEMS, 0, 32, "Flippers: swim and dive.", 20},
-        {"Secret Medicine", KEYITEMS, 1, 32, "Secret Medicine: revives Link once when his health runs out.", 21},
+        {"Flippers", KEYITEMS, 0, 32, "Lets Link swim and dive.", 20},
+        {"Secret Medicine", KEYITEMS, 1, 32, "Revives Link once when his health runs out.", 21},
         {"Sleepy Toadstool", KEYITEMS, 15, 32, "The Sleepy Toadstool for the witch.", 10},
-        {"Seashell Sensor", SENSOR, 0, 8, "The Seashell Sensor: chimes near hidden Secret Seashells."},
+        {"Seashell Sensor", SENSOR, 0, 8, "Chimes when you're near a hidden Secret Seashell."},
     };
     bit_rows(items, sizeof items / sizeof items[0]);
 }
@@ -227,7 +229,7 @@ static void sec_ammo(void) {
     static const Bit ups[] = {
         {"Bomb bag upgrade", UPGRADES, 4, 8, "Carry up to 60 bombs instead of 30."},
         {"Quiver upgrade", UPGRADES, 5, 8, "Carry up to 60 arrows instead of 30."},
-        {"Powder upgrade", UPGRADES, 3, 8, "Carry up to 40 Magic Powder instead of 20."},
+        {"Magic Powder upgrade", UPGRADES, 3, 8, "Carry up to 40 Magic Powder instead of 20."},
     };
     bit_rows(ups, 3);
     ammo("Bombs", BOMBS, 4, 30, "Bombs carried.");
@@ -306,12 +308,12 @@ static void sec_keys(void) {
     {   // (the game's own pickup, as from a chest: in the dungeon Link is in)
         bool in = current_dungeon() >= 0;
         if (!in) opt_disable_next();
-        if (opt_button("Give small key", "One Small Key for the dungeon Link is in.")) give_item_request(48, 1, -1);
+        if (opt_button("Give Small Key", "One Small Key for the dungeon Link is in.")) give_item_request(48, 1, -1);
         if (!in) opt_disable_next();
         if (opt_button("Give Nightmare Key", "The Nightmare Key for the dungeon Link is in.")) give_item_request(49, 1, -1);
     }
     bit_rows(keys, 5);
-    opt_choice("Dungeon", &g_dungeon, k_dungeons, 9, 0, "The dungeon the rows below are for.");
+    opt_choice("Dungeon", &g_dungeon, k_dungeons, 9, 0, "Which dungeon the keys, map, compass and Stone Beak below belong to.");
     dungeon_rows(g_dungeon);
 }
 
@@ -330,7 +332,7 @@ static void sec_companions(void) {
     static const struct { int c; const char *name; } comps[] = {{1, "BowWow"}, {2, "Marin"}, {4, "Flying Rooster"}, {3, "Ghost"}};
     for (const auto &k : comps) {
         bool on = pets_owned(k.c);
-        if (opt_toggle(k.name, &on, false, "In this seed companions are items: owning one lets it follow Link."))
+        if (opt_toggle(k.name, &on, false, "Companions are items in this seed. Turn one on and it follows Link."))
             pets_give(k.c, on);
     }
 }
@@ -341,12 +343,11 @@ static void sec_give(void) {
         static const char *names[N_ITEMS];
         for (int i = 0; i < N_ITEMS; i++) names[i] = kItems[i].name;
         static int item = 0, count = 1, index = -1;
-        opt_choice("Item", &item, names, N_ITEMS, -1, "The item to give, through the game's own pickup.");
+        opt_choice("Item", &item, names, N_ITEMS, -1, "The item to give. It comes through the game's normal pickup.");
         opt_int("Count", &count, 1, 99, 1, 1, "%d", "How many to give.");
         opt_int("Index", &index, -1, 99, 1, -1, "%d",
-                "Which one, for items with several: Pieces of Heart, Secret Seashells, Golden Leaves etc. each have "
-                "an index.\n\nFor Small Keys, Nightmare Keys, maps, compasses and Stone Beaks: the dungeon (1-8, Color "
-                "Dungeon 9). Any: the dungeon Link is in.", "Any");
+                "Which one to give. For keys, maps, compasses and Stone Beaks it's the dungeon number, 1 to 8, or 9 "
+                "for the Color Dungeon. Any uses the dungeon you're in.", "Any");
         if (opt_button("Give", "Gives the item above.")) {
             int id = kItems[item].id, idx = index;
             // (dungeon items: keysanity's index, 0-7 = dungeons 1-8, 9 = Color Dungeon; runtime/hle/keysanity.c)
@@ -363,7 +364,7 @@ static void sec_give(void) {
 enum { SEC_QUICK, SEC_PLAYER, SEC_EQUIPMENT, SEC_AMMO, SEC_SONGS, SEC_BOTTLES, SEC_INSTRUMENTS, SEC_KEYS, SEC_TRADE,
        SEC_COMPANIONS, SEC_GIVE, N_SEC };
 static const char *const k_sec_name[N_SEC] = {"Quick", "Player", "Equipment", "Ammo", "Ocarina songs", "Bottles",
-                                              "Instruments of the Sirens", "Dungeon keys", "Trading quest", "Companions",
+                                              "Siren Instruments", "Dungeon keys", "Trading quest", "Companions",
                                               "Give any item"};
 static void (*const k_sec_rows[N_SEC])(void) = {sec_quick, sec_player, sec_equipment, sec_ammo, sec_songs, sec_bottles,
                                                 sec_instruments, sec_keys, sec_trade, sec_companions, sec_give};
@@ -378,10 +379,7 @@ static int g_focus;
 extern "C" bool save_editor_took_back(void) { return g_back_frame == ImGui::GetFrameCount(); }
 
 extern "C" void save_editor_draw(float scale) {
-    if (!loaded()) {
-        ImGui::TextDisabled("Load a save file first: the editor changes the save that's currently being played.");
-        return;
-    }
+    if (!loaded()) return;  // (no save loaded: nothing to edit)
     int frame = ImGui::GetFrameCount();
     if (frame - g_last_frame > 1) g_focus = FOCUS_NONE, g_in_right = false;  // (back on the tab)
     g_last_frame = frame;

@@ -9,7 +9,7 @@
 static const struct { const char *tex, *name; } kSeedHashIcons[32] = {
     {"ItemBomb_00^w", "Bomb"},           {"ItemBoomerang_00^w", "Boomerang"},  {"ItemBottle_00^w", "Bottle"},
     {"ItemBow_00^w", "Bow"},             {"ItemFookShot_00^w", "Hookshot"},     {"ItemMagicPowder_00^w", "Powder"},
-    {"ItemMagicRod_00^w", "Fire Rod"},   {"ItemOcarina_03^w", "Ocarina"},       {"ItemRocsFeather_00^w", "Feather"},
+    {"ItemMagicRod_00^w", "Magic Rod"},  {"ItemOcarina_03^w", "Ocarina"},       {"ItemRocsFeather_00^w", "Feather"},
     {"ItemShovel_00^w", "Shovel"},       {"CollectInst_00^w", "Cello"},         {"CollectInst_01^w", "Conch"},
     {"CollectInst_02^w", "Bell"},        {"CollectInst_03^w", "Harp"},          {"CollectInst_04^w", "Marimba"},
     {"CollectInst_05^w", "Triangle"},    {"CollectInst_06^w", "Organ"},         {"CollectInst_07^w", "Drum"},
