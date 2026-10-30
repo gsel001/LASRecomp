@@ -1,5 +1,5 @@
-# Experimental builds: platforms we can't test on real hardware (Linux aarch64; Windows on ARM later) are never on the
-# normal releases. Each build goes on the rolling pre-release "experimental", replacing that platform's previous file,
+# Experimental builds, a rolling pre-release for experimental platforms: ones that aren't official but are available
+# for testing (Linux aarch64; Windows on ARM later). From 1.0.0 they are never on the normal releases. Each build goes on the rolling pre-release "experimental", replacing that platform's previous file,
 # or, for a reporter testing a fix, on a test build of its own. None of the files holds game code or game files.
 # Run by pushing a tag at the commit to build (from any branch that has this file):
 #   experimental-<anything>  -> the rolling "experimental" release; the pushed tag is deleted after the upload
@@ -150,7 +150,7 @@ jobs:
               TITLE="Experimental builds"
               printf '%s\n' \
                 "> [!WARNING]" \
-                "> **These builds are experimental.** They are for platforms we can't test on real hardware, so expect problems. For everything else, use the **[latest release]($URL/releases/latest)**." \
+                "> **These builds are experimental.** They are for platforms that aren't official but are available for testing, so expect problems. For everything else, use the **[latest release]($URL/releases/latest)**." \
                 "" \
                 "The latest build for each platform is below. Each new build replaces the old one, and the game tells you on its start screen when a newer one is here." \
                 "" \
