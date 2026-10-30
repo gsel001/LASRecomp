@@ -9,7 +9,8 @@ the logic thinks is open too early - the circular dig-spot gates of #81 / #144. 
 runtime/ui/rando_tab.mm (seed_id_encode, request.json in start_generation): keep the two in step.
 
 usage: seed_sweep.py <romfs> [-n seeds] [-j jobs] [--id SEED-ID ...] [--keep dir] [--stealing M] [--shopsanity N]
-                     [--souls] [--rooms N ...] [--triforce N] [--miniboss-freq F] [--entrances T] [--hints] [--rocks] [--full]
+                     [--souls] [--rooms N ...] [--triforce N] [--start-instruments N] [--miniboss-freq F] [--entrances T]
+                     [--hints] [--rocks] [--full]
        (default: the fixed seed IDs below + 40 random option mixes with digsanity on; basic logic, as players get)
 --miniboss-freq F: every random mix randomizes enemies with mini-boss frequency F (0 - 3: Normal, 2x, 3x, All), enemy
 mode Seeded or Random; --full: each seed is also generated in full (game files, enemies and all) and must finish -
@@ -79,7 +80,8 @@ def decode(text):
     o = {'rng': get(36)}
     o.update((k, get(w)) for k, w in FIELDS)
     o.update((k, bool(get(1))) for k in FLAGS)
-    pos[0] = n - 18  # (fixed places before the checksum: rando_tab.mm id_hunt .. id_mbfreq; v5 only: the hunt)
+    pos[0] = n - 22  # (fixed places before the checksum: rando_tab.mm id_startinst .. id_mbfreq; v5 only: these two)
+    o['start_instruments'] = get(4) if n == BITS else 0
     o['triforce_needed'], o['triforce_extra'] = (get(6), get(2)) if n == BITS else (0, 0)
     pos[0] = n - 10
     o['steal_needs_sword'], o['no_stealing'] = bool(get(1)), bool(get(1))
@@ -103,7 +105,8 @@ def encode(o):
     for k in FLAGS:
         put(o.get(k, False), 1)
     bits.extend([0] * (BITS - 5 - len(bits)))
-    del bits[BITS - 18:]
+    del bits[BITS - 22:]
+    put(o.get('start_instruments', 0), 4)
     put(o.get('triforce_needed', 0), 6)
     put(o.get('triforce_extra', 0), 2)
     put(o.get('steal_needs_sword', False), 1)
@@ -149,6 +152,7 @@ def request(sid, o):
         'entrance-tier': tier, 'entrance-decoupled': tier >= 2 and o['decoupled'],
         'pet-rooster': o['pet_rooster'], 'pet-ghost': o['pet_ghost'], 'open-desert': not o['pet_marin'],
         'triforce-hunt': o.get('triforce_needed', 0), 'triforce-extra': o.get('triforce_extra', 0) * 25,
+        'starting-instruments': o.get('start_instruments', 0),
         'include': [f'{s}-seashell-reward' for s in shells],
         'exclude': [f'{s}-seashell-reward' for s in shells[o['seashells']:]],
         **({'apples': True} if o.get('apples') else {}),
@@ -346,6 +350,8 @@ def main():
     ap.add_argument('--souls', action='store_true', help='every random mix with boss and mini-boss souls on')
     ap.add_argument('--triforce', type=int, metavar='N', help='every random mix a Triforce hunt for N pieces '
                     '(extra pieces cycled: none / +25%% / +50%%)')
+    ap.add_argument('--start-instruments', type=int, choices=range(9), metavar='N',
+                    help='every random mix starts with N instruments (0 - 8)')
     ap.add_argument('--hints', action='store_true', help='every random mix with Hints on (seed_hints.py)')
     ap.add_argument('--rooms', choices=list(ROOM_IDS), action='append',
                     help='dungeon room shuffle of the random mixes (repeat: cycled)')
@@ -377,6 +383,8 @@ def main():
             o['entrances'], o['bushes'] = args.entrances, True
         if args.triforce:
             o['triforce_needed'], o['triforce_extra'] = args.triforce, i % 3
+        if args.start_instruments is not None:
+            o['start_instruments'] = args.start_instruments
         if args.rooms:
             o['room_shuffle'] = ROOM_IDS[args.rooms[i % len(args.rooms)]]
         if args.stealing:

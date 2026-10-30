@@ -155,6 +155,7 @@ struct GenOpts {
     bool steal_needs_sword = true;  // off = "Steal without sword" ('always'); on = the vanilla rule ('normal')
     // Triforce hunt (tools/rando/triforce.py): pieces needed (0 = off, 1-50), extra pieces 0 none / 1 +25% / 2 +50%
     int tri_needed = 0, tri_extra = 0;
+    int start_instruments = 0;  // starting-instruments: Link starts with this many (0-8), picked by the seed (LAS shuffler)
     bool race = false;        // race mode: the spoiler log stays shut until the credits, a seed hash on the title screen
     bool apples = false;      // apples: Applesanity, 3 checks per apple tree (tools/rando/apple_trees.py)
     bool chest_looks = false; // chest-looks: a chest's colour shows what's inside (tools/rando/chest_looks.py)
@@ -187,9 +188,10 @@ static void tri_mode_from_opts(void) {
 // IDs can be shared. The generator gets the ID itself as its seed string. Bump SEED_ID_VERSION when the bit layout
 // changes. v2: 36-bit random part; v3: + dungeon room shuffle; v4: 25 characters, + shopsanity, pets, Trendy Game
 // prizes (v2 / v3 IDs had 20: they still load, the options they don't hold are off); v5: 30 characters, + Triforce hunt
-// (v4 IDs still load, without the hunt). The logic, skip-story and entrance tier 3 fields stay in the layout but are
+// (v4 IDs still load, without the hunt; v5 IDs made before Starting Instruments hold 0 there). The logic, skip-story and entrance tier 3 fields stay in the layout but are
 // fixed now (basic, on, tier 2 includes the connector caves). Layout: version, random part, fields, the yes/no flags
-// (growing up), then fixed places counted back from the end: [v5: hunt pieces needed 6, extra 2] steal-needs-sword,
+// (growing up), then fixed places counted back from the end: [v5: starting instruments 4, hunt pieces needed 6,
+// extra 2] steal-needs-sword,
 // no-stealing, enemy mode, mini-boss frequency 2, checksum 5.
 enum { SEED_ID_VERSION = 5, SEED_ID_BITS = 150, SEED_ID_BITS_V4 = 125, SEED_ID_BITS_V3 = 100, SEED_ID_FLAGS_V3 = 23 };
 static int id_mbfreq(int bits) { return bits - 5 - 2; }              // mini-boss frequency
@@ -197,6 +199,7 @@ static int id_enemymode(int bits) { return id_mbfreq(bits) - 1; }    // enemy mo
 static int id_nosteal(int bits) { return id_enemymode(bits) - 1; }   // stealing off (older IDs: 0 = stealing allowed)
 static int id_stealsword(int bits) { return id_nosteal(bits) - 1; }  // stealing needs the sword (older: 0 = no sword)
 static int id_hunt(int bits) { return id_stealsword(bits) - 8; }     // (v5) Triforce hunt: pieces needed 6, extra 2
+static int id_startinst(int bits) { return id_hunt(bits) - 4; }      // (v5) starting instruments 0-8
 static const char kB32[] = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 struct Bits {
@@ -236,9 +239,10 @@ static void seed_id_encode(GenOpts &o, char *out, size_t cap) {
     x.put(o.room_shuffle, 2);  // (v3)
     x.put(o.shopsanity, 2);    // (v4)
     for (int i = 0; bool *f = opt_flags(o, i); i++) x.put(*f, 1);
-    int data = x.n;  // (the flags may grow up to id_hunt)
+    int data = x.n;  // (the flags may grow up to id_startinst)
     x.put(0, SEED_ID_BITS - 5 - data);
-    x.n = id_hunt(SEED_ID_BITS);  // (fixed places before the checksum: IDs made before them hold 0 = the old behaviour)
+    x.n = id_startinst(SEED_ID_BITS);  // (fixed places before the checksum: IDs made before them hold 0 = the old behaviour)
+    x.put(o.start_instruments, 4);
     x.put(o.tri_needed, 6);
     x.put(o.tri_extra, 2);
     x.put(o.steal_needs_sword, 1);
@@ -296,8 +300,11 @@ static std::string seed_id_decode(const char *text, GenOpts &o) {
     else t.steal_needs_sword = t.no_stealing = false;
     if (bits == SEED_ID_BITS) { x.n = id_hunt(bits); t.tri_needed = (int)x.get(6); t.tri_extra = (int)x.get(2); }
     else t.tri_needed = t.tri_extra = 0;
+    if (bits == SEED_ID_BITS) { x.n = id_startinst(bits); t.start_instruments = (int)x.get(4); }
+    else t.start_instruments = 0;
     if (t.room_shuffle > 3 || t.shopsanity > 2 || t.logic > 4 || t.traps > 4 || t.seashells > 5 || t.tunic >= 14 ||
-        t.entrances > 3 || t.start_rupees > 999 || t.tri_needed > 50 || t.tri_extra > 2)
+        t.entrances > 3 || t.start_rupees > 999 || t.tri_needed > 50 || t.tri_extra > 2 ||
+        t.start_instruments > 8)
         return LN("Not a valid seed ID.");
     t.ohko = false;
     // retired choices (older IDs still load): logic is always basic, story scenes always skipped, tier 3
@@ -484,6 +491,7 @@ static void start_generation(void) {
     if (g_opts.fast_egg) fprintf(f, " \"fast-egg\": true,\n");  // (off: not written, seeds as before)
     if (g_opts.hints) fprintf(f, " \"hints\": true,\n");  // (only when on: seeds without it stay as they were)
     fprintf(f, " \"triforce-hunt\": %d, \"triforce-extra\": %d,\n", g_opts.tri_needed, g_opts.tri_extra * 25);
+    fprintf(f, " \"starting-instruments\": %d,\n", g_opts.start_instruments);
     fprintf(f, " \"entrance-tier\": %d, \"entrance-decoupled\": %s,\n", g_opts.entrances, g_opts.entrances >= 2 && g_opts.decoupled ? "true" : "false");
     fprintf(f, " \"pet-rooster\": %s, \"pet-ghost\": %s, \"open-desert\": %s,\n", g_opts.pet_rooster ? "true" : "false",
             g_opts.pet_ghost ? "true" : "false", g_opts.pet_marin ? "false" : "true");
@@ -650,6 +658,7 @@ static void rows_general(void) {
 }
 
 static void rows_goal(void) {
+    opt_int("Starting Instruments", &g_opts.start_instruments, 0, 8, 1, 0, "%d", "How many instruments you start with.");
     bool hunt = g_opts.tri_needed > 0;
     if (opt_toggle("Triforce hunt", &hunt, false,
                    "Collect Triforce pieces to win. The last one you need rolls the credits, no Wind Fish required."))
