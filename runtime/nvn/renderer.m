@@ -3210,7 +3210,8 @@ static const char *sc_src =
     "  int2 q = clamp(int2(floor(in.pos.xy) * w.trail.z * w.screen.zw / w.screen.xy), int2(0), int2(w.screen.zw) - 1);\n"
     "  float d = dt.read(uint2(q));\n"
     "  if (d >= 0.99999) return float4(0.0, 1e9, 0.0, 2.0);\n"
-    "  return float4(world_at(w, (float2(q) + 0.5) / w.screen.zw, d), (sv.read(uint2(q)).r & 0xC0u) ? 1.0 : 0.0);\n"
+    "  uint m = sv.read(uint2(q)).r;\n"  // (a character or grass - or a face tree, stencil slot 7: not a wall)
+    "  return float4(world_at(w, (float2(q) + 0.5) / w.screen.zw, d), ((m & 0xC0u) || ((m >> 1) & 7u) == 7u) ? 1.0 : 0.0);\n"
     "}\n"
     "fragment float4 sc_half_fs(VO in [[stage_in]], constant SF &w [[buffer(0)]], depth2d<float> dt [[texture(0)]],\n"
     "                           texture2d<uint> sv [[texture(2)]], texture2d<float> ct [[texture(3)]],\n"
@@ -3304,7 +3305,8 @@ static const char *sc_src =
     "  if (k <= 0.0) return none;\n"
     // alcoves - a doorstep inside a doorway's arch, lit or not: walls rise close by on the left, the right and behind
     // (up the screen) all three (ground by a wall or in a corner has two at most). Each side: the highest of a few
-    // samples out to ~90 pixels (at 1080p: a doorway is ~100 wide), the level's model only, ramped over 0.4-0.7 in world height
+    // samples out to ~90 pixels (at 1080p: a doorway is ~100 wide), the level's model only - not the face trees by
+    // Crazy Tracy's (stencil slot 7, the prep: ground among them is open ground) - ramped over 0.4-0.7 in world height
     "  float side[3];\n"
     "  int2 dirs[3] = {int2(-1, 0), int2(1, 0), int2(0, w.flags.x > 0.5 ? 1 : -1)};\n"
     "  for (int d = 0; d < 3; d++) {\n"
@@ -3391,7 +3393,8 @@ static const char *sc_src =
 static NvnTexture *sc_color, *sc_depth;  // the scene pass's targets this frame (while its opaque things are drawn)
 static float sc_vp[16], sc_zn, sc_zf;
 static bool sc_dm1;
-static int sc_tree;  // this draw: a tree shaken bare, its slot 1..7 (stencil bits 1-3), 0: none
+static int sc_tree;  // this draw: a tree shaken bare, its slot 1..6 (stencil bits 1-3), 7 a face tree (Crazy
+                     // Tracy's, the Tabahl Wasteland: no wall for the alcoves' test), 0: none
 static int sc_mark;  // this draw: 0 as the game has it, 1 the level's model (stencil bit 7 clear), 2 anything else (set),
                      // 3 grass and bushes (bit 6: a light dusting)
 static uint64_t sc_frame = ~0ull, sc_done = ~0ull;
@@ -3659,20 +3662,21 @@ static void snow_cover_check(CmdRec *r, bool indexed, Prog *pr) {
     if (level && st.rt.ncolor) {  // (the water is part of the level's model: told by its maps, recolour_water.c -
         // looked up once per program and mesh, then remembered: a mesh keeps its maps)
         enum { WC = 1024 };
-        static struct { uint64_t key; bool water; } wc[WC];
+        static struct { uint64_t key; bool water, face; } wc[WC];
         uint64_t key = ((uint64_t)(uintptr_t)pr * 0x9E3779B97F4A7C15ull ^ st.vbuf[0].addr) | 1;
         uint32_t k = (uint32_t)(key ^ key >> 29) & (WC - 1);
-        if (wc[k].key == key) level = !wc[k].water;
-        else {
+        if (wc[k].key != key) {
             extern int renderer_texpatch_of(NvnTexture *t);
-            bool water = false;
+            bool water = false, face = false;
             for (int i = 0; i < pr->fi->ntex && !water; i++) {
                 NvnTexture *t = shader_texture_object(1, &pr->fi->tex[i]);
-                if (t && recolour_class_of(renderer_texpatch_of(t)) == 32) water = true;
+                int c = t ? recolour_class_of(renderer_texpatch_of(t)) : 0;
+                water |= c == 32, face |= c == 26;  // (W_WATER; S_FACE: the face trees)
             }
-            wc[k].key = key, wc[k].water = water;
-            level = !water;
+            wc[k].key = key, wc[k].water = water, wc[k].face = face;
         }
+        level = !wc[k].water;
+        if (wc[k].face) sc_tree = 7;  // (a face tree: no wall for the alcoves' test - stencil slot 7, sc_prep_fs)
     }
     // the depth pre-pass and the colour pass' opaque draws (Link and the water are only in that one)
     if (st.ds[0] && (st.ds[1] || (st.rt.ncolor && !blended)) && st.rt.depth->width == wx_scene_w &&
@@ -3715,23 +3719,26 @@ static void snow_cover_check(CmdRec *r, bool indexed, Prog *pr) {
         // grass (a level draw), and only in the colour pass (the pre-pass has no maps)
         if (st.rt.ncolor && !level) {
             enum { FC = 1024 };
-            static struct { uint64_t key; bool fol, tree; } fc[FC];
+            static struct { uint64_t key; bool fol, tree, rock, face; } fc[FC];
             uint64_t key = ((uint64_t)(uintptr_t)pr * 0x9E3779B97F4A7C15ull ^ st.vbuf[0].addr) | 1;
             uint32_t k = (uint32_t)(key ^ key >> 29) & (FC - 1);
             if (fc[k].key != key) {
                 extern int renderer_texpatch_of(NvnTexture *t);
-                bool fol = false, tree = false;
+                bool fol = false, tree = false, rock = false, face = false;
                 for (int i = 0; i < pr->fi->ntex; i++) {
                     NvnTexture *t = shader_texture_object(1, &pr->fi->tex[i]);
                     int c = t ? recolour_class_of(renderer_texpatch_of(t)) : 0;
                     fol |= c == 18 || c == 23 || c == 24;  // (S_BUSH, S_LIME, S_LAWN)
                     tree |= c == 16 || c == 17 || c == 22;  // (S_TREE, S_PALM, S_MYST: canopies)
+                    rock |= c == 27, face |= c == 26;  // (S_ROCK, S_FACE)
                 }
-                fc[k].key = key, fc[k].fol = fol, fc[k].tree = tree;
+                fc[k].key = key, fc[k].fol = fol, fc[k].tree = tree, fc[k].rock = rock, fc[k].face = face;
             }
             // (and the scenery actors the rule above gives full snow unless they are trees: the village's big flower
-            // plants and props carry no maps the recolours know - a dusting suits them better than a white blanket)
-            if (fc[k].fol || (sc_mark == 1 && !fc[k].tree)) sc_mark = 3;
+            // plants and props carry no maps the recolours know - a dusting suits them better than a white blanket.
+            // Rocks take it like the ground: a cap on top; the face trees as the level's own, slot 7)
+            if (fc[k].fol || (sc_mark == 1 && !fc[k].tree && !fc[k].rock && !fc[k].face)) sc_mark = 3;
+            else if (sc_mark == 1 && fc[k].face) sc_tree = 7;
             else if (sc_mark == 1 && fc[k].tree && st.ubuf[0][3].addr && st.ubuf[0][3].size == 144) {
                 // (a tree: its world position - an actor's transform is vertex constant slot 3, 3x4 rows - for the
                 // bonk that shakes its snow off, weather.c; a shaken one's slot goes to stencil bits 1-3)

@@ -249,7 +249,7 @@ static int g_ntrees, g_trees_next;
 
 int weather_snow_tree(const float pos[3]) {
     if (g_trees_next < 64) memcpy(g_trees[g_trees_next++], pos, sizeof g_trees[0]);
-    for (int i = 1; i < 8; i++)
+    for (int i = 1; i < 7; i++)
         if (g_shaken[i].at > 0 && fabsf(g_shaken[i].x - pos[0]) < 0.3f && fabsf(g_shaken[i].z - pos[2]) < 0.3f) return i;
     return 0;
 }
@@ -267,7 +267,7 @@ static void shake_tree(float x, float z, float within) {  // (the tree nearest x
     }
     const float *tp = g_trees[best];
     int s = 1;
-    for (int i = 1; i < 8; i++) {  // (the same tree again, else a free slot, else the oldest)
+    for (int i = 1; i < 7; i++) {  // (the same tree again, else a free slot, else the oldest)
         if (fabsf(g_shaken[i].x - tp[0]) < 0.3f && fabsf(g_shaken[i].z - tp[2]) < 0.3f) { s = i; break; }
         if (g_shaken[i].at < g_shaken[s].at) s = i;
     }
@@ -389,7 +389,8 @@ bool weather_snow_cover(SnowFrame *s, const float vp[16]) {
         if (e) sscanf(e, "%f,%f,%f,%f", &tone[0], &tone[1], &tone[2], &tone[3]);
     }
     memcpy(s->tone, tone, sizeof tone);
-    for (int i = 1; i < 8; i++) {  // (a shaken tree grows its snow back at the rate it fell, from none)
+    s->shake[7] = 1;  // (slot 7: the face trees, never shaken - renderer.m's sc_tree)
+    for (int i = 1; i < 7; i++) {  // (a shaken tree grows its snow back at the rate it fell, from none)
         if (g_shaken[i].at <= 0) continue;
         float grown = (float)(t - g_shaken[i].at) / (weather_current() == WEATHER_BLIZZARD ? g_build * 0.45f : g_build);
         s->shake[i] = g_cover > 0 ? fminf(1, grown / g_cover) : 1;

@@ -68,7 +68,8 @@ typedef struct {
     float zr[4];       // the scene depth's range (near, far - near), the trail map's period (world), its size (texels)
     float trail[4];    // x: how long a print takes to fill in again (s), y: test view (1 the cover's mask in red)
     float tone[4];     // the snow's colour in the scene's (linear, pre-tone-map) units (rgb), w: their reference white
-    float shake[8];    // trees shaken bare (a bonk): slot 1..7's share of the cover now (stencil bits 1-3; [0] unused)
+    float shake[8];    // trees shaken bare (a bonk): slot 1..6's share of the cover now (stencil bits 1-3; [0] unused;
+                       // [7] 1: the face trees by Crazy Tracy's, no wall for the alcoves' test)
 } SnowFrame;
 // The cover for this frame (false: none - not snowing / nothing settled / not the overworld). vp: the scene pass's
 // view-projection (rows). The renderer fills screen, flags.xy and zr.xy.
@@ -85,7 +86,7 @@ typedef struct { float p[4]; float v[4]; float g[4]; } SnowPuff;
 int weather_snow_puffs(SnowPuff out[SNOW_PUFFS]);
 float weather_snow_now(void);  // (their time base: the weather's time)
 // A tree drawn this frame (the renderer: a scenery actor with canopy maps; its model's world position): which shaken
-// tree slot it is (1..7, its snow regrowing after a bonk), 0: none
+// tree slot it is (1..6, its snow regrowing after a bonk), 0: none
 int weather_snow_tree(const float pos[3]);
 // Game thread, every frame: Link's position for the footprints and the kicked-up snow (snow on the overworld only),
 // and for a storm's lightning (it aims at him now and then; it shocks him if he is still there when it strikes)
