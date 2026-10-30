@@ -156,7 +156,11 @@ jobs:
                 "" \
                 "- Linux aarch64 (ARM): \`linux-aarch64.AppImage\`" \
                 "" \
-                "Please report what works and what doesn't on the [issues page]($URL/issues), with your device, its graphics driver and the log (\`lasrecomp.log\` in the data folder)." > notes.md
+                "## Help us make these better" \
+                "" \
+                "We really want to hear how these builds run on your device, good or bad. We don't have most of this hardware ourselves, so your reports are how these platforms get better. When something doesn't work, we'll work through it with you on the issue, make test builds for you to try, and fix what we can." \
+                "" \
+                "To report, open an issue on the [issues page]($URL/issues) with your device, its graphics driver, screenshots of anything that looks wrong, and the log (\`lasrecomp.log\` in the data folder)." > notes.md
             else
               TITLE="Test build: ${RELEASE#test-}"
               echo "Linux aarch64 test build from $SHA." > notes.md
