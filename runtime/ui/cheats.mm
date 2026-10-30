@@ -12,6 +12,7 @@ extern "C" {
 #include "../hle.h"
 #include "../settings.h"
 int game_in_play(void);
+void hud_hearts_refresh(void);
 }
 
 // GA(LIVE_SAVE): main + 0x1CBB220
@@ -78,11 +79,11 @@ extern "C" void cheats_draw(float scale) {
     if (opt_toggle("Infinite rupees", &g_settings.cheat_rupees, false, "Rupees stay at 9999.")) settings_save();
 
     opt_section("One time");
-    if (opt_button("Max hearts", "Gives you all 20 hearts and fills them. The HUD catches up after the next screen "
-                                 "change.")) {
+    if (opt_button("Max hearts", "Gives you all 20 hearts and fills them.")) {
         F<uint16_t>(CONTAINERS) = 0x1FF;
         F<uint64_t>(PIECES) = 0xFFFFFFFFull;
         F<int16_t>(HP) = (int16_t)max_hp();
+        hud_hearts_refresh();
     }
     if (opt_button("Refill hearts", "Refills health to full.")) F<int16_t>(HP) = (int16_t)max_hp();
     if (opt_button("Max ammo capacity", "Upgrades bombs and arrows to 60 and Magic Powder to 40, then fills them. "
