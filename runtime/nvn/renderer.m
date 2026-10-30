@@ -3176,7 +3176,7 @@ static const char *sc_src =
     "  for (int j = 1; j <= 4 && yl > 1e8; j++) {\n"
     "    int2 qq = clamp(q + int2(0, step * j), int2(0), mx);\n"
     "    float dk = dt.read(uint2(qq));\n"
-    "    float y = dk < 0.99999 && !(sv.read(uint2(qq)).r & 0x80u) ? world_at(w, (float2(qq) + 0.5) * e, dk).y : 1e9;\n"
+    "    float y = dk < 0.99999 && !(sv.read(uint2(qq)).r & 0xC0u) ? world_at(w, (float2(qq) + 0.5) * e, dk).y : 1e9;\n"
     "    if (y < 1e8 && abs(y - yp) < 0.03) yl = min(y, yp), jl = j;\n"
     "    yp = y;\n"
     "  }\n"
@@ -3208,7 +3208,7 @@ static const char *sc_src =
     "  float2 e = 1.0 / w.screen.zw;\n"
     "  float d = dt.read(uint2(q));\n"
     "  float4 none = float4(0.0, 1.0, 0.0, d < 0.99999 ? sc_eye(w, (float2(q) + 0.5) * e, d) : 1e6);\n"
-    "  if (d >= 0.99999 || (sv.read(uint2(q)).r & 0x80u)) return none;\n"
+    "  if (d >= 0.99999 || (sv.read(uint2(q)).r & 0xC0u)) return none;\n"
     // the surface's normal over a ring of 6 depth samples ~6 pixels (at 1080p) around it: the cross products of
     // neighbouring samples, summed (a plane fit). Samples across a depth gap (further than 3x the ring's own size at
     // this depth) are left out: no normals across edges, and seams, one-pixel steps and leaves average out - stable
@@ -3280,7 +3280,7 @@ static const char *sc_src =
     "  for (int i = 0; i < 8; i++) {\n"
     "    int2 qq = clamp(q + int2(round(sc_ring[i] * rad * 8.0)), int2(0), mx);\n"
     "    float dk = dt.read(uint2(qq));\n"
-    "    if (dk >= 0.99999 || (sv.read(uint2(qq)).r & 0x80u)) continue;\n"
+    "    if (dk >= 0.99999 || (sv.read(uint2(qq)).r & 0xC0u)) continue;\n"
     "    valid++;\n"
     "    float3 vq = world_at(w, (float2(qq) + 0.5) * e, dk) - p;\n"
     "    above += smoothstep(0.2, 0.4, dot(vq, n));\n"
@@ -3301,7 +3301,7 @@ static const char *sc_src =
     "    for (int j = 3; j <= 15; j += 4) {\n"
     "      int2 qq = clamp(q + dirs[d] * int(rad * float(j)), int2(0), mx);\n"
     "      float dk = dt.read(uint2(qq));\n"
-    "      if (dk >= 0.99999 || (sv.read(uint2(qq)).r & 0x80u)) continue;\n"
+    "      if (dk >= 0.99999 || (sv.read(uint2(qq)).r & 0xC0u)) continue;\n"
     "      side[d] = max(side[d], smoothstep(0.4, 0.7, world_at(w, (float2(qq) + 0.5) * e, dk).y - p.y));\n"
     "    }\n"
     "  }\n"
@@ -3319,12 +3319,27 @@ static const char *sc_src =
     "  int2 mx = int2(w.screen.zw) - 1;\n"
     "  int2 q = clamp(int2(uv * w.screen.zw), int2(0), mx);\n"
     "  uint4 sm = sv.read(uint2(q));\n"
-    "  if (abs(w.trail.y - 2.0) < 0.5) return half4((sm.r & 0x80u) ? 1.0h : 0.0h, (sm.r & 1u) ? 1.0h : 0.0h, 0.0h, 1.0h);\n"  // (test)
+    "  if (abs(w.trail.y - 2.0) < 0.5) return half4((sm.r & 0x80u) ? 1.0h : 0.0h, (sm.r & 1u) ? 1.0h : 0.0h, (sm.r & 0x40u) ? 1.0h : 0.0h, 1.0h);\n"  // (test)
     "  if (sm.r & 0x80u) return dst;\n"  // (a character: no snow on it)
     "  float d = dt.read(uint2(q));\n"
     "  if (d >= 0.99999) return dst;\n"
     "  float3 c = float3(dst.rgb);\n"
     "  float mc = max(c.r, max(c.g, c.b));\n"
+    // grass and bushes: a dusting - patches in the world (low frequency: they don't crawl as the blades sway), more
+    // on the lit tips and tops than in the shaded depths of a tuft (by the picture's own brightness, which moves
+    // with the blades; no normals from the depth of thin blades), a third at most, in patches over a few percent - still clearly grass
+    "  if (sm.r & 0x40u) {\n"
+    "    float3 p = world_at(w, (float2(q) + 0.5) / w.screen.zw, d);\n"
+    "    float2 pr = float2(p.x * 0.8 + p.z * 0.6, p.z * 0.8 - p.x * 0.6);\n"
+    "    float cover = w.flags.z;\n"
+    "    float nz = vnoise(pr * 0.7) * 0.55 + vnoise(pr * 2.6) * 0.45;\n"
+    "    float patch = smoothstep(0.62 - 0.22 * cover, 0.78 - 0.22 * cover, nz);\n"  // (never all of it: ~1/3 at most)
+    "    float tip = smoothstep(0.03, 0.25, mc / w.tone.w);\n"
+    "    float k = (0.06 + 0.3 * patch) * tip * smoothstep(0.1, 0.8, cover);\n"
+    "    if (w.trail.y > 0.5) return half4(mix(dst, half4(1.0, 0.0, 0.0, 1.0), half(k)));\n"
+    "    float3 col = w.tone.rgb * (0.55 + 0.45 * saturate(mc / w.tone.w));\n"
+    "    return half4(half3(mix(c, col, k)), dst.a);\n"
+    "  }\n"
     // near black - the insides of doorways, windows, the gaps under eaves (~0.02 here; ground in a shadow is 0.03 and
     // up): left exactly as the game drew it
     "  if (mc < 0.018) return dst;\n"
@@ -3364,7 +3379,8 @@ static const char *sc_src =
 static NvnTexture *sc_color, *sc_depth;  // the scene pass's targets this frame (while its opaque things are drawn)
 static float sc_vp[16], sc_zn, sc_zf;
 static bool sc_dm1;
-static int sc_mark;  // this draw: 0 as the game has it, 1 the level's model (stencil bit 7 clear), 2 anything else (set)
+static int sc_mark;  // this draw: 0 as the game has it, 1 the level's model (stencil bit 7 clear), 2 anything else (set),
+                     // 3 grass and bushes (bit 6: a light dusting)
 static uint64_t sc_frame = ~0ull, sc_done = ~0ull;
 static uint32_t wx_scene_w, wx_scene_h;  // (the scene image the composite read: the scene pass's target size)
 
@@ -3634,6 +3650,30 @@ static void snow_cover_check(CmdRec *r, bool indexed, Prog *pr) {
             if (level && i == nlvl && nlvl < 64) lvl_fs[nlvl++] = g_cur_fs_hash;
             else if (!level && i < nlvl && st.ubuf[0][4].addr && (st.ubuf[0][4].size == 1056 || st.ubuf[0][4].size == 1072))
                 sc_mark = 1;
+        }
+        // Grass and bushes - the tall grass tufts (instanced), cuttable / liftable bushes, flowers and small plants -
+        // get a light dusting of their own (stencil bit 6, sc_fs): told by their maps (runtime/nvn/recolour_seasons.c's
+        // tall grass, bush and lime-foliage maps), looked up once per program and mesh. Not the level's own ground
+        // grass (a level draw), and only in the colour pass (the pre-pass has no maps)
+        if (st.rt.ncolor && !level) {
+            enum { FC = 1024 };
+            static struct { uint64_t key; bool fol, tree; } fc[FC];
+            uint64_t key = ((uint64_t)(uintptr_t)pr * 0x9E3779B97F4A7C15ull ^ st.vbuf[0].addr) | 1;
+            uint32_t k = (uint32_t)(key ^ key >> 29) & (FC - 1);
+            if (fc[k].key != key) {
+                extern int renderer_texpatch_of(NvnTexture *t);
+                bool fol = false, tree = false;
+                for (int i = 0; i < pr->fi->ntex; i++) {
+                    NvnTexture *t = shader_texture_object(1, &pr->fi->tex[i]);
+                    int c = t ? recolour_class_of(renderer_texpatch_of(t)) : 0;
+                    fol |= c == 18 || c == 23 || c == 24;  // (S_BUSH, S_LIME, S_LAWN)
+                    tree |= c == 16 || c == 17 || c == 22;  // (S_TREE, S_PALM, S_MYST: canopies)
+                }
+                fc[k].key = key, fc[k].fol = fol, fc[k].tree = tree;
+            }
+            // (and the scenery actors the rule above gives full snow unless they are trees: the village's big flower
+            // plants and props carry no maps the recolours know - a dusting suits them better than a white blanket)
+            if (fc[k].fol || (sc_mark == 1 && !fc[k].tree)) sc_mark = 3;
         }
     }
     if (!scene || !level || blended || !st.ds[0]) return;
@@ -3905,8 +3945,8 @@ static void draw_one(CmdRec *r, bool indexed) {
                 if (sc_mark) {  // (snow: bit 7 too where it passes - the game's keep / zero / replace become a replace,
                     // the reference keeps the game's bits: snow_cover_check)
                     MTLStencilOperation p = sd.depthStencilPassOperation;
-                    if (p == MTLStencilOperationKeep) sd.writeMask = 0x80;
-                    else if (p == MTLStencilOperationZero || p == MTLStencilOperationReplace) sd.writeMask |= 0x80;
+                    if (p == MTLStencilOperationKeep) sd.writeMask = 0xC0;
+                    else if (p == MTLStencilOperationZero || p == MTLStencilOperationReplace) sd.writeMask |= 0xC0;
                     if (p == MTLStencilOperationKeep || p == MTLStencilOperationZero || p == MTLStencilOperationReplace)
                         sd.depthStencilPassOperation = MTLStencilOperationReplace;
                 }
@@ -3919,10 +3959,10 @@ static void draw_one(CmdRec *r, bool indexed) {
     [enc setDepthStencilState:dss];
     last_dsk = dsk;
     last_dss = dss;
-    if (sc_mark) {  // (the game's reference where its pass op was a replace, 0 for a zero; bit 7 the mark)
+    if (sc_mark) {  // (the game's reference where its pass op was a replace, 0 for a zero; bits 6-7 the mark)
         uint32_t ops = st.ds[5] | st.ds[6] << 8 | st.ds[7] << 16, ref[2];
         for (int f = 0; f < 2; f++)
-            ref[f] = (st.ds[3] && ((f ? ops >> 20 : ops >> 8) & 0xF) == 3 ? st.stencil_ref[f] & 0x7F : 0) | (sc_mark == 2 ? 0x80 : 0);
+            ref[f] = (st.ds[3] && ((f ? ops >> 20 : ops >> 8) & 0xF) == 3 ? st.stencil_ref[f] & 0x3F : 0) | (sc_mark == 2 ? 0x80 : sc_mark == 3 ? 0x40 : 0);
         [enc setStencilFrontReferenceValue:ref[0] backReferenceValue:ref[1]];
     } else [enc setStencilFrontReferenceValue:st.stencil_ref[0] backReferenceValue:st.stencil_ref[1]];
     [enc setBlendColorRed:st.blend_color[0] green:st.blend_color[1] blue:st.blend_color[2] alpha:st.blend_color[3]];
