@@ -427,10 +427,6 @@ def main():
             soul_cat, romfs, logic_defs, vanilla, {n: p['room'] for n, p in pot_locs.items() if p.get('room')}),
             'conditions', flush=True)
 
-    if settings.get('key-rings'):  # key rings (tools/rando/key_rings.py; after the room shuffle set the key counts)
-        import key_rings
-        print('key rings:', key_rings.convert(item_defs, settings), flush=True)
-
     result = {}
     errors = []
     stage('Shuffling items', 0.04)
@@ -521,8 +517,6 @@ def main():
             if a is not None:
                 ix[src] = a
             print(f'test swap: {item} {src} -> {loc}', flush=True)
-    if settings.get('key-rings'):
-        print('key rings placed:', key_rings.mark_indexes(result['placements']), flush=True)
     with open(os.path.join(out_dir, 'logic.json'), 'w') as f:  # the seed's final logic (tracker: tools/rando/tracker.py)
         json.dump({k: {kk: vv for kk, vv in v.items() if kk in ('type', 'subtype', 'region', 'content') or kk.startswith('condition-')}
                    for k, v in sh.logic_defs.items() if not v.get('_check_only')}, f)
@@ -580,7 +574,6 @@ def main():
         with open(os.path.join(out_dir, 'placements.json'), 'w') as f:
             json.dump({'placements': {k: v for k, v in pl.items() if isinstance(v, str)},
                        'access': {k: 1 for k, v in settings.items() if v is True},
-                       **({'key-ring-sizes': settings['key-ring-sizes']} if 'key-ring-sizes' in settings else {}),
                        **({'room-plan': {'layouts': room_plan[0], 'jumps': room_plan[1]}} if room_plan else {})}, f)
         sys.exit(0)
 

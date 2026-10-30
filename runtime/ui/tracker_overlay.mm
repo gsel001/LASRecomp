@@ -564,27 +564,26 @@ static std::string item_name(int id, int cnt) {
     static const struct { const char *tok, *name; } names[] = {
         {"sword", "Sword"}, {"shield", "Shield"}, {"bracelet", "Power Bracelet"}, {"bomb", "Bombs"}, {"bow", "Bow"},
         {"hookshot", "Hookshot"}, {"boomerang", "Boomerang"}, {"rod", "Magic Rod"}, {"shovel", "Shovel"},
-        {"powder", "Magic Powder"}, {"feather", "Feather"}, {"boots", "Pegasus Boots"}, {"ocarina", "Ocarina"},
+        {"powder", "Magic Powder"}, {"feather", "Roc's Feather"}, {"boots", "Pegasus Boots"}, {"ocarina", "Ocarina"},
         {"bottle", "Bottle"}, {"flippers", "Flippers"}, {"medicine", "Secret Medicine"}, {"tail-key", "Tail Key"},
         {"slime-key", "Slime Key"}, {"angler-key", "Angler Key"}, {"face-key", "Face Key"}, {"bird-key", "Bird Key"},
         {"full-moon-cello", "Full Moon Cello"}, {"conch-horn", "Conch Horn"}, {"sea-lilys-bell", "Sea Lily's Bell"},
         {"surf-harp", "Surf Harp"}, {"wind-marimba", "Wind Marimba"}, {"coral-triangle", "Coral Triangle"},
-        {"evening-calm-organ", "Evening Calm Organ"}, {"thunder-drum", "Thunder Drum"}, {"mushroom", "Sleepy Mushroom"},
+        {"evening-calm-organ", "Evening Calm Organ"}, {"thunder-drum", "Thunder Drum"}, {"mushroom", "Sleepy Toadstool"},
         {"shell-sensor", "Seashell Sensor"}, {"song-ballad", "Ballad of the Wind Fish"}, {"song-mambo", "Manbo's Mambo"},
         {"song-soul", "Frog's Song of Soul"}, {"red-tunic", "Red Tunic"}, {"blue-tunic", "Blue Tunic"},
-        {"golden-leaf", "Golden Leaves"}, {"seashell", "Seashells"}, {"bow-wow", "BowWow"}, {"rooster", "Rooster"},
+        {"golden-leaf", "Golden Leaves"}, {"seashell", "Seashells"}, {"bow-wow", "BowWow"}, {"rooster", "Flying Rooster"},
         {"marin-companion", "Marin"}, {"ghost", "Ghost"}, {"yoshi-doll", "Yoshi Doll"}, {"ribbon", "Ribbon"},
         {"dog-food", "Dog Food"}, {"bananas", "Bananas"}, {"stick", "Stick"}, {"honeycomb", "Honeycomb"},
         {"pineapple", "Pineapple"}, {"hibiscus", "Hibiscus"}, {"letter", "Letter"}, {"broom", "Broom"},
         {"fishing-hook", "Fishing Hook"}, {"necklace", "Necklace"}, {"mermaid-scale", "Mermaid's Scale"},
-        {"magnifying-lens", "Magnifying Lens"}, {"powder-capacity", "Powder upgrade"}, {"bomb-capacity", "Bomb upgrade"},
-        {"arrow-capacity", "Arrow upgrade"}};
+        {"magnifying-lens", "Magnifying Lens"}, {"powder-capacity", "Magic Powder upgrade"},
+        {"bomb-capacity", "Bomb bag upgrade"}, {"arrow-capacity", "Quiver upgrade"}};
     const std::string &t = g_tok_names[id];
     std::string s;
     for (auto &x : names) if (t == x.tok) s = x.name;
     // (in-game wording: the list already names the dungeon; a soul by its owner, "Moldorm's soul")
-    if (s.empty() && !t.compare(0, 4, "key-")) return cnt > 1 ? std::to_string(cnt) + " small keys" : "a small key";
-    else if (s.empty() && !t.compare(0, 8, "keyring-")) return "key ring";
+    if (s.empty() && !t.compare(0, 4, "key-")) return cnt > 1 ? std::to_string(cnt) + " Small Keys" : "a Small Key";
     else if (s.empty() && !t.compare(0, 14, "nightmare-key-")) return "Nightmare Key";
     else if (s.empty() && !t.compare(0, 5, "soul-")) {
         std::string n = t.substr(5);
@@ -1004,15 +1003,16 @@ static int filters(void) { return g_settings.tracker_filters >= 0 ? g_settings.t
 static void set_filters(int f) { g_settings.tracker_filters = f; settings_save(); }
 
 static const char *kind_label(int k) {
-    static const char *const l[K_N] = {"Chests", "Heart pieces", "Seashells", "Bosses", "Shops", "Other", "Bushes", "Digs", "Pots",
-                                       "Rocks"};
+    static const char *const l[K_N] = {"Chests", "Pieces of Heart", "Seashells", "Bosses", "Shops", "Other", "Bushes",
+                                       "Digs", "Pots", "Rocks"};
     int kind;
     bool owned;
     if (k == K_BOSS && souls_at(0, &kind, &owned)) return "Souls";  // (boss / mini-boss fights: their souls)
     return l[k];
 }
 static const char *kind_one(int k) {
-    static const char *const l[K_N] = {"Chest", "Heart piece", "Seashell", "Boss", "Shop", "Item", "Bush", "Dig", "Pot", "Rock"};
+    static const char *const l[K_N] = {"Chest", "Piece of Heart", "Seashell", "Boss", "Shop", "Item", "Bush", "Dig", "Pot",
+                                       "Rock"};
     return l[k];
 }
 
@@ -1321,7 +1321,7 @@ static std::vector<std::string> dungeon_pills(const std::string &dk) {
     for (auto &n : g_nodes)
         for (int32_t o : n.cond) if (o >= 0 && (o & 0xFFFFF) == key) most = std::max(most, o >> 20);
     char b[64];
-    if (most) snprintf(b, sizeof b, "Small keys %d / %d", held, most), p.push_back(b);
+    if (most) snprintf(b, sizeof b, "Small Keys %d / %d", held, most), p.push_back(b);
     p.push_back((LD8(r + 1) >> 3) & 1 ? "Nightmare Key: found" : "Nightmare Key: not found");
     int s = souls_owned(d);
     if (s >= 0) p.push_back(s ? "Boss soul: found" : "Boss soul: needed");
@@ -1382,7 +1382,7 @@ extern "C" void tracker_overlay_draw(ImVec2 display, ImFont *font) {
     // (default view); a screen's checks (interiors at their door) count for its area
     static const char *const kLabel[21] = {"Kanalet Castle", "Rapids Ride", "Southern Face Shrine", "Animal Village",
                                            "Yarna Desert", "", "Martha's Bay", "Pothole Field", "", "", "Mabe Village",
-                                           "Mysterious Forest", "Goponga Swamp", "Koholint Prairie", "Tabahl Wasteland",
+                                           "Mysterious Woods", "Goponga Swamp", "Koholint Prairie", "Tabahl Wasteland",
                                            "Tal Tal Mountain Range", "Mt. Tamaranch", "Tal Tal Heights", "Toronbo Shores",
                                            "Ukuku Prairie", "Cemetery"};
     ImVec2 lp[21];
@@ -1667,7 +1667,7 @@ extern "C" void tracker_overlay_draw(ImVec2 display, ImFont *font) {
             ListView v;
             v.title = title_of(ui.panel_type, ui.panel_id);
             char sub[64];
-            snprintf(sub, sizeof sub, ui.panel_type == 1 ? "%d / %d found" : "%d / %d collected", done, (int)rows.size());
+            snprintf(sub, sizeof sub, "%d / %d found", done, (int)rows.size());
             v.sub = sub;
             v.filt = std::string("Filter: ") + filter_word;
             if (ui.panel_type == 1) v.pills = dungeon_pills(g_groups[ui.panel_id].label);

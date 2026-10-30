@@ -1004,8 +1004,9 @@ def vanilla_check(loc, v, settings):
 
 def dungeon_items(settings):
     """How many items besides the small keys stay in their dungeon: Nightmare Key, Map, Compass, Stone Beak, less
-    what the dungeon-items setting sends anywhere."""
-    return 4 - {'mc': 2, 'mcb': 3, 'stone-beak': 1}.get(settings.get('dungeon-items', 'none'), 0)
+    what's given at the start."""
+    from RandomizerCore.Randomizers.data import start_dungeon_items
+    return 4 - len(start_dungeon_items({'dungeon-items': 'none', **settings}))
 
 
 def lr_vanilla(k, v, settings):

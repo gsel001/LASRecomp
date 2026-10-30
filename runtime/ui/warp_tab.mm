@@ -57,12 +57,11 @@ static bool matches(const WarpSpot &w, const char *f) {
 static bool spot(const WarpSpot &w, bool show_area, bool enabled) {
     bool swim = warp_blocked(w.locator);
     enabled = enabled && !swim;
-    char lbl[256], desc[320];
+    char lbl[256];
     if (show_area) snprintf(lbl, sizeof lbl, "%s  -  %s", w.area, w.label);
     else snprintf(lbl, sizeof lbl, "%s", w.label);
-    snprintf(desc, sizeof desc, "%s%s / %s", !swim ? "" : strncmp(w.locator, "Warp_", 5)
-                 ? "Link arrives here swimming: needs the Flippers.\n\n" : "A Manbo's Mambo arrival point: can't be warped to directly.\n\n",
-             w.level, w.locator);
+    const char *desc = !swim ? NULL : strncmp(w.locator, "Warp_", 5) ? "You arrive here swimming, so you need the Flippers."
+                                      : "This is where Manbo's Mambo drops you. You can't warp here directly.";
     ImGui::PushID((int)(&w - kWarpSpots));  // (spot names repeat across levels)
     if (!enabled) opt_disable_next();
     bool go = opt_action(lbl, "", desc, false);
@@ -125,7 +124,7 @@ extern "C" bool warp_tab_draw(float scale) {
     if (!area_ok) g_area = na ? areas[0].first : -1;
 
     if (!avail) {  // (no header line otherwise: the lists start at the top)
-        ImGui::TextDisabled("Load a save and get into the game to warp.");
+        ImGui::TextDisabled("Load a save to warp.");
         ImGui::Spacing();
     }
 

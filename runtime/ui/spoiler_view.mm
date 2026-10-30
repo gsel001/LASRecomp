@@ -70,8 +70,8 @@ bool spoiler_view_draw(const std::string &seed, float scale) {
     ImGui::Text("Spoiler log - %s", seed.c_str());
     ImGui::Separator();
     if (g_missing) {
-        ImGui::TextWrapped("No readable spoiler for this seed yet. Generate it with: tools/rando/spoiler_view.py rando/%s",
-                           seed.c_str());
+        ImGui::TextWrapped("This seed has no spoiler log to show. Seeds made with Spoiler log off or by an older version "
+                           "don't have one.");
         return true;
     }
     if (!revealed) {
@@ -82,7 +82,7 @@ bool spoiler_view_draw(const std::string &seed, float scale) {
     }
     static char q[64];
     ImGui::SetNextItemWidth(420 * scale);
-    ui_input_text("##q", q, sizeof q, 0, "search (item, place...)", "Search the spoiler log");
+    ui_input_text("##q", q, sizeof q, 0, "Search items and places", "Search the spoiler log");
     ImGui::BeginChild("##spoiler", ImVec2(0, 0), ImGuiChildFlags_None, ImGuiWindowFlags_NavFlattened);
     for (size_t i = 0; i < g_doc.size(); i++) {
         Node &n = g_doc[i];

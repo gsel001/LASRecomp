@@ -45,8 +45,10 @@ FLAGS = ['bomb_bag', 'powder_bag', 'environments', 'pets_in_dungeons', 'skip_sto
          'randomize_enemies', 'randomize_music', 'open_mabe', 'fast_songs', 'boss_cutscenes', 'spoiler', 'decoupled',
          'pots', 'no_buffs', 'bushes', 'pet_rooster', 'pet_ghost', 'pet_marin', 'trendsanity', 'boss_souls',
          'hookshot_any', 'digs', 'miniboss_souls', 'no_start_sword', 'no_start_shield', 'no_start_ocarina',
-         'tunic_upgrades', 'shellsanity', 'race', 'random_cosmetics', 'apples', 'chest_looks', 'key_rings', 'hints',
-         'rocks']  # (order after random_cosmetics: apples, chest looks, key rings, hints, rocks)
+         'tunic_upgrades', 'shellsanity', 'race', 'random_cosmetics', 'apples', 'chest_looks',
+         'retired_key_rings',  # (key rings, removed: the slot stays so seed IDs keep their layout)
+         'hints', 'rocks', 'compass_differs', 'no_start_mambo']
+         # (order after random_cosmetics: apples, chest looks, retired key rings, hints, rocks, compass_differs, no_start_mambo)
 ROOM_IDS = {'off': 0, 'coupled': 2, 'decoupled': 3}  # room_shuffle in the ID (1: the retired Coherent)
 BITS = 150  # (v5: 30 characters; v4 IDs had 125 - decode reads both)
 TIMEOUT = 900  # (seconds per seed)
@@ -81,6 +83,8 @@ def decode(text):
     pos[0] = n - 10
     o['steal_needs_sword'], o['no_stealing'] = bool(get(1)), bool(get(1))
     o['enemy_mode'], o['miniboss_freq'] = get(1), get(2)
+    if o['miniboss_freq'] == 2:
+        o['miniboss_freq'] = 3  # (the retired 3x reads as All)
     if o['room_shuffle'] == 1:  # (retired Coherent: Coupled, as rando_tab.mm decodes it)
         o['room_shuffle'] = 2
     return o
@@ -114,11 +118,14 @@ def request(sid, o):
     """request.json as rando_tab.mm start_generation writes it (logic: always basic)."""
     shells = ['5', '15', '30', '40', '50']
     start = (['sword'] if not o['no_start_sword'] else []) + (['shield'] if not o['no_start_shield'] else []) + \
-        (['ocarina', 'song-mambo'] if not o['no_start_ocarina'] else [])
+        (['ocarina'] if not o['no_start_ocarina'] else []) + (['song-mambo'] if not o['no_start_mambo'] else [])
     mini = o['randomize_enemies'] and o['enemy_minibosses']
     tier = min(o['entrances'], 2)
     return {
         'seed': sid, 'logic': 'basic', 'dungeon-items': ['none', 'stone-beak', 'mc', 'mcb'][o['dungeon_items']],
+        'dungeon-items-start': [k for k, on in (('map', o['dungeon_items'] & 2),
+                                                ('compass', bool(o['dungeon_items'] & 2) != o.get('compass_differs', False)),
+                                                ('stone-beak', o['dungeon_items'] & 1)) if on],
         'traps': ['none', 'few', 'several', 'many', 'trapsanity'][o['traps']],
         'shuffle-instruments': o['shuffle_instruments'], 'shuffle-dungeons': o['shuffle_dungeons'],
         'randomize-enemies': o['randomize_enemies'], 'randomize-music': o['randomize_music'],
@@ -144,13 +151,15 @@ def request(sid, o):
         'include': [f'{s}-seashell-reward' for s in shells],
         'exclude': [f'{s}-seashell-reward' for s in shells[o['seashells']:]],
         **({'apples': True} if o.get('apples') else {}),
-        **({'chest-looks': True} if o.get('chest_looks') else {}), **({'key-rings': True} if o.get('key_rings') else {}),
+        **({'chest-looks': True} if o.get('chest_looks') else {}),
         **({'hints': True} if o.get('hints') else {}), **({'rocks': True} if o.get('rocks') else {})}  # (only when on: seeds without it stay as they were)
 
 
 def stealing(o):
     """LAS 'stealing' as rando_tab.mm writes it (stealing off only with shopsanity)."""
-    return 'never' if o['shopsanity'] and o['no_stealing'] else 'normal' if o['steal_needs_sword'] else 'always'
+    if not o['shopsanity']:
+        return 'normal'  # (Fast Stealing is a Shopsanity sub-option)
+    return 'never' if o['no_stealing'] else 'normal' if o['steal_needs_sword'] else 'always'
 
 
 def random_options(rng):
@@ -163,7 +172,8 @@ def random_options(rng):
              shopsanity=rng.randrange(3), steal_needs_sword=rng.random() < 0.5, no_stealing=rng.random() < 0.3)
     for k in ('bomb_bag', 'powder_bag', 'bushes', 'pots', 'open_mabe', 'decoupled', 'pet_rooster', 'pet_ghost',
               'pet_marin', 'trendsanity', 'boss_souls', 'miniboss_souls', 'hookshot_any', 'no_start_sword',
-              'no_start_shield', 'no_start_ocarina', 'shuffle_instruments', 'shuffle_dungeons', 'inc_trade',
+              'no_start_shield', 'no_start_ocarina', 'no_start_mambo', 'compass_differs', 'shuffle_instruments',
+              'shuffle_dungeons', 'inc_trade',
               'inc_dampe', 'inc_rapids', 'shellsanity'):
         o[k] = rng.random() < 0.4
     return o
@@ -179,12 +189,10 @@ def _compile(cond):
     return compile(py.replace('|', ' or ').replace('&', ' and ').replace('!', ' not '), '<logic>', 'eval')
 
 
-def playthrough(logic, placements, access, extra=None, rings=None):
+def playthrough(logic, placements, access, extra=None):
     """LAS's checkAccess + las_headless's spheres; extra: {location: condition} ANDed on. -> access after all."""
     sys.path.insert(0, HERE)
     import playthrough as pt
-    pt.KEY_RINGS.clear()
-    pt.KEY_RINGS.update({'keyring-' + d: n for d, n in (rings or {}).items()})  # (key rings count as their keys)
     code = {}
 
     def ev(cond, a):
@@ -218,14 +226,13 @@ def check_seed(out_dir, walk, needed=0):
     # (walk: (region, fallback) pairs - a pocket's own region with the entrance shuffle, else its door's region)
     extra = {name: ' | '.join(sorted({r if r in logic else fb for r, fb in walk[name]}))
              for name in logic if name in walk}
-    rings = p.get('key-ring-sizes')
-    a, seen = playthrough(logic, p['placements'], p['access'], rings=rings)
+    a, seen = playthrough(logic, p['placements'], p['access'])
     def missing(acc):  # (Triforce hunt: the pieces are the goal)
         if needed:
             return [] if acc.get('triforce-piece', 0) >= needed else [f"triforce {acc.get('triforce-piece', 0)}/{needed}"]
         return [i for i in INSTRUMENTS + ['kill-nightmare'] if not acc.get(i)]
     own = missing(a)
-    a2, seen2 = playthrough(logic, p['placements'], p['access'], extra, rings)
+    a2, seen2 = playthrough(logic, p['placements'], p['access'], extra)
     strict = missing(a2)
     lost = sorted(k for k in seen - seen2 if k in extra and p['placements'].get(k)
                   and not re.match(r'(pot|dig)-|rupee|heart$|seashell|trap', p['placements'][k]))
@@ -332,7 +339,6 @@ def main():
                     '(off / dungeons / + houses, caves & connector caves), bushsanity on')
     ap.add_argument('--full', action='store_true', help='also generate each seed in full (game files)')
     ap.add_argument('--apples', action='store_true', help='every random mix with Applesanity on')
-    ap.add_argument('--key-rings', action='store_true', help='every random mix with key rings on')
     ap.add_argument('--chest-looks', action='store_true', help='every random mix with chest looks on')
     ap.add_argument('--rocks', action='store_true', help='every random mix with Rocksanity on')
     ap.add_argument('--souls', action='store_true', help='every random mix with boss and mini-boss souls on')
@@ -361,8 +367,6 @@ def main():
             o['hints'] = True
         if args.souls:
             o['boss_souls'] = o['miniboss_souls'] = True
-        if args.key_rings:
-            o['key_rings'] = True
         if args.chest_looks:
             o['chest_looks'] = True
         if args.rocks:

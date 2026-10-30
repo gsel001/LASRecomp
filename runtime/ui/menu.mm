@@ -464,10 +464,10 @@ static void tab_display(void) {
     opt_section("Display");
     const char *aspects[] = {"Unlocked", "Original 16:9"};
     opt_choice("Aspect ratio", &g_settings.aspect, aspects, 2, ASPECT_UNLOCKED,
-               "Unlocked: the view fills the window, so wider (or taller) windows show more of the island - up to "
-               "ultrawide; houses and dungeons keep their framing. Original 16:9: the game's own framing, with bars.");
+               "Unlocked fills the window and shows more of the island on wide screens, up to ultrawide. Original keeps "
+               "the game's 16:9 view with bars.");
     bool fs = g_settings.fullscreen;
-    if (opt_toggle("Fullscreen", &fs, false, "Fills the screen. Also: F11, Alt+Enter or Cmd+Ctrl+F.")) {
+    if (opt_toggle("Fullscreen", &fs, false, "Fills the screen. You can also press F11, Alt+Enter or Cmd+Ctrl+F.")) {
         g_settings.fullscreen = fs;
         g_want_fullscreen_apply.store(true);
     }
@@ -490,29 +490,30 @@ static void tab_display(void) {
         float sx, sy;
         renderer_get_scale(&sx, &sy);
         char d[400];
-        int n = snprintf(d, sizeof d, "How sharp the 3D image is. Match display: your screen's own resolution. Dynamic: "
-                                      "as sharp as your GPU keeps at full speed. 1x-4x: the Switch's 1080p times that%s. "
-                                      "75%% / 50%% / 25%%: a share of the display, for slower machines.\n\nRendering at "
-                                      "%.0f x %.0f.", g_gpu_integrated ? " (1x: 720p on this GPU)" : "", 1920.0 * sx, 1080.0 * sy);
+        int n = snprintf(d, sizeof d, "How sharp the 3D image is. Match display uses your screen's resolution, and "
+                                      "Dynamic goes as sharp as your GPU can at full speed. 1x to 4x multiply the Switch's "
+                                      "1080p%s. 75%%, 50%% and 25%% are for slower machines.\n\nRendering at %.0f x %.0f.",
+                         g_gpu_integrated ? ", and 1x is 720p on this GPU" : "", 1920.0 * sx, 1080.0 * sy);
         if (g_settings.res_mode == RES_DYNAMIC)
-            snprintf(d + n, sizeof d - n, " Dynamic: %.0f%% of the display right now.", output_scale_dynamic_factor() * 100);
+            snprintf(d + n, sizeof d - n, " Dynamic is at %.0f%% of the display right now.", output_scale_dynamic_factor() * 100);
         if (opt_choice("Internal resolution", &ri, res, NRES, rdef, d, false))
             g_settings.res_mode = res_mode[ri], g_settings.res_auto = false;
     }
     {   // each OS's own upscaler next to bilinear (UPSCALE_SHARP: MetalFX on macOS, AMD FSR 1 on Windows)
 #ifdef __APPLE__
         static const char *ups[] = {"Bilinear", "MetalFX"};
-        const char *ud = "How the image is scaled up to the window when it renders at a lower resolution. MetalFX: Apple's "
-                         "upscaler, sharper. Bilinear: plain and soft.";
+        const char *ud = "How the picture is scaled up when it renders below your window's resolution. MetalFX is "
+                         "Apple's upscaler and looks sharper, Bilinear is plain and soft.";
 #else
         static const char *ups[] = {"Bilinear", "AMD FSR 1"};
-        const char *ud = "How the image is scaled up to the window when it renders at a lower resolution. AMD FSR 1: "
-                         "edge-aware upscaling and sharpening, sharper. Bilinear: plain and soft.";
+        const char *ud = "How the picture is scaled up when it renders below your window's resolution. AMD FSR 1 "
+                         "sharpens edges as it scales, Bilinear is plain and soft.";
 #endif
         int ui = g_settings.upscaler == UPSCALE_BILINEAR ? 0 : 1;
         char udm[512];
         if (g_settings.res_mode == RES_MATCH) {  // (renders at the window's size: nothing to scale up)
-            snprintf(udm, sizeof udm, "%s\n\nNot used at Match display: the game already renders at your display's resolution.", ud);
+            snprintf(udm, sizeof udm, "%s\n\nDoes nothing at Match display, since the game already renders at your screen's "
+                                      "resolution.", ud);
             ud = udm;
             opt_disable_next();
         }
@@ -521,8 +522,7 @@ static void tab_display(void) {
     }
     static const char *aa[] = {"Off", "SMAA"};
     opt_choice("Anti-aliasing", &g_settings.antialias, aa, 2, AA_OFF,
-               "Smooths jagged edges of the game image before it is scaled to the window. SMAA: finds the edges and "
-               "blends only along them, so textures stay sharp. Most useful at a lower internal resolution.");
+               "Smooths jagged edges. SMAA keeps textures sharp and helps most at a lower internal resolution.");
 
     opt_section("Game");
     opt_toggle("Remove blur", &g_settings.blur_removal, false,
@@ -541,16 +541,16 @@ static void tab_cosmetics(void) {
     CosColour *rows[] = {&g_settings.tunic, &g_settings.hearts, &g_settings.hair, &g_settings.skin, &g_settings.shield,
                          &g_settings.leaves, &g_settings.grass, &g_settings.sand, &g_settings.water,
                          &g_settings.fences, &g_settings.walls, &g_settings.houses};
-    if (opt_button("Randomize all", "Every color below gets a random color."))
+    if (opt_button("Randomize all", "Picks a random color for everything below."))
         for (CosColour *c : rows) c->pick = 1 + rand() % (COL_RANDOM - 1);  // (a named colour: shown as what it is)
-    if (opt_button("Default all", "Everything on this page back to the game's own look.")) {
+    if (opt_button("Default all", "Puts everything on this page back to the game's normal look.")) {
         for (CosColour *c : rows) c->pick = COL_DEFAULT;
         g_settings.enemy_colours = 0;
         g_settings.screen_filter = 0;
     }
     opt_section("Colors");
     opt_colour("Tunic color", &g_settings.tunic, COL_SLOT_TUNIC,
-               "Link's tunic color. Default: the game's own (or the randomizer seed's).");
+               "Link's tunic color. Default uses the game's color, or the seed's if it has one.");
     opt_colour("Heart color", &g_settings.hearts, COL_SLOT_HEARTS, "The color of the hearts on the HUD.");
     opt_colour("Hair color", &g_settings.hair, COL_SLOT_HAIR, "Link's hair color.");
     opt_colour("Body color", &g_settings.skin, COL_SLOT_SKIN, "Link's body color.");  // (larecomp.ini: skin)
@@ -578,22 +578,22 @@ static void tab_cosmetics(void) {
     }
     opt_colour("Leaves color", &g_settings.leaves, COL_SLOT_LEAVES, "The overworld's tree leaves and bushes.");
     opt_colour("Grass color", &g_settings.grass, COL_SLOT_GRASS, "The overworld's grass.");
-    opt_colour("Sand color", &g_settings.sand, COL_SLOT_SAND, "The beaches, the desert and the sandy south.");
+    opt_colour("Sand color", &g_settings.sand, COL_SLOT_SAND, "The beaches, the desert and other sandy ground.");
     opt_colour("Water color", &g_settings.water, COL_SLOT_WATER, "The sea, rivers, ponds, waterfalls and dungeon water.");
     opt_colour("Fence color", &g_settings.fences, COL_SLOT_FENCES, "The wooden fences.");
     opt_colour("Wall color", &g_settings.walls, COL_SLOT_WALLS, "The overworld's cliff walls and ledges.");
-    opt_colour("House color", &g_settings.houses, COL_SLOT_HOUSES, "The village houses' roofs.");
+    opt_colour("House color", &g_settings.houses, COL_SLOT_HOUSES, "The roofs of the village houses.");
     opt_section("Enemies");
     {   // (Off in a seed with its own cosmetics: "Seed", its enemies are per seed)
         const char *modes[N_ENEMY_COLOUR_MODES];
         for (int i = 0; i < N_ENEMY_COLOUR_MODES; i++) modes[i] = g_enemy_colour_modes[i];
         if (cosmetics_seed_on()) modes[0] = "Seed";
         opt_choice("Enemy colors", &g_settings.enemy_colours, modes, N_ENEMY_COLOUR_MODES, 0,
-                   "Each kind of enemy in another color. Enemies whose color shows their strength or type keep theirs.");
+                   "Gives each kind of enemy a new color. Enemies whose color shows how strong they are keep theirs.");
     }
     opt_section("Screen");
     opt_choice("Screen filter", &g_settings.screen_filter, g_screen_filters, N_SCREEN_FILTERS, 0,
-               "A filter over the whole picture, the HUD included.");
+               "Puts a filter over the whole screen, HUD included.");
     opt_end();
 }
 
@@ -602,12 +602,12 @@ static void tab_audio(void) {
     opt_section("Sound");
     float pct = roundf(g_settings.volume * 100);
     if (opt_slider("Volume", &pct, 0, 200, 5, 100, "%g%%",
-                   "The game's volume. 100% is the game's own level; above it, louder."))
+                   "The game's volume. 100% is normal, higher is louder."))
         g_settings.volume = pct / 100.0f;
     opt_toggle("Room reverb", &g_settings.reverb, true,
                "The game's echo in caves, dungeons and big rooms.");
     opt_toggle("Movie audio", &g_settings.movie_audio, true,
-               "Sound in the game's movies (the opening and the ending). Applies the next time a movie starts.");
+               "Sound in the opening and ending movies. Changes the next time a movie plays.");
     opt_end();
 }
 
@@ -626,10 +626,10 @@ static void tab_quit(float scale, bool in_game) {
     opt_section("Quit");
     if (!ask) {
         if (!in_game) opt_disable_next();  // (already on it)
-        if (opt_action("Quit to Start Screen", "", in_game ? d1 : "You're on the start screen.")) ask = 1;
-        if (opt_action("Quit to Desktop", "", d2)) ask = 2;
+        if (opt_action("Quit to start screen", "", in_game ? d1 : "You're on the start screen.")) ask = 1;
+        if (opt_action("Quit to desktop", "", d2)) ask = 2;
     } else {
-        if (opt_action(ask == 1 ? "Yes, quit to Start Screen" : "Yes, quit to Desktop", "", ask == 1 ? d1 : d2)) {
+        if (opt_action(ask == 1 ? "Yes, quit to start screen" : "Yes, quit to desktop", "", ask == 1 ? d1 : d2)) {
             settings_save();
             if (ask == 1) {
                 rt_request_reboot(2);
@@ -799,7 +799,7 @@ static void tabs_body(float scale, bool in_game, void (*prelaunch)(float)) {
     struct Tab { const char *name; int id; bool on; };
     Tab tabs[11];
     int ntabs = 0;
-    if (prelaunch) tabs[ntabs++] = {"Prelaunch", -1, true};
+    if (prelaunch) tabs[ntabs++] = {"Game files", -1, true};
     static const char *names[] = {"Video", "Audio", "Save Editor", "Randomizer", "Warp", "Cheats", "Gameplay",
                                   "Cosmetics", "Controls", "Quit"};
     static const int order[] = {8, 0, 1, 6, 7, 3, 5, 4, 2, 9};  // Controls, Video, Audio, Gameplay, Cosmetics, Randomizer,
@@ -934,7 +934,7 @@ static void tabs_body(float scale, bool in_game, void (*prelaunch)(float)) {
         case 1: tab_audio(); break;
         case 2:
             if (game_in_play()) save_editor_draw(scale);
-            else ImGui::TextDisabled("Load a save file and get into the game to edit it.");
+            else ImGui::TextDisabled("Load a save to edit it.");
             break;
         case 3: rando_tab_draw(scale); break;
         case 4: if (warp_tab_draw(scale)) set_open(false); break;

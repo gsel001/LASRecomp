@@ -225,7 +225,7 @@ static bool has_build_cache(void) { read_build_cache(); return g_has_build_cache
 
 static std::string incomplete(int have) {
     char b[96];
-    snprintf(b, sizeof b, "Game files incomplete (%d of %d files)", have, (int)ROMFS_FILES);
+    snprintf(b, sizeof b, "Game files incomplete, %d of %d files", have, (int)ROMFS_FILES);
     return b;
 }
 
@@ -268,7 +268,7 @@ static const char *const CHANGED_HINT = "Copy your game files again, then choose
 // "" = ready to play, else what is wrong
 static std::string check_game_files(const std::string &root) {
     std::string why = check_copied_files(root);
-    if (why.empty() && !gamelib_present(root.c_str())) return "Game code not built yet";
+    if (why.empty() && !gamelib_present(root.c_str())) return "Game not built yet";
     return why;
 }
 
@@ -278,7 +278,8 @@ static const char *status_hint(const std::string &why) {
         return "Some of the game's files are missing, usually from a copy or unzip that stopped partway. Copy your game "
                "files again, then choose that folder and set them up again.";
     if (why == "Wrong version of the game") return "LAS Recomp needs version 1.0.0, 1.0.1 or 1.1.0 of the game.";
-    if (why == "Game code not built yet") return "Set up the game files to build it (a few minutes, only once).";
+    if (why == "Game not built yet")
+        return "Set up the game files to build it. It takes a few minutes and you only do it once.";
     return "Set up the game files to play.";
 }
 
@@ -312,18 +313,17 @@ static void set_failure(int k, int have = -1, const char *reason = NULL) {
     static const char *const hint[] = {
         "",
         PICK_FOLDER_HINT,
-        "LAS Recomp needs the game's own files (the exefs and romfs folders), not .xci / .nsp / .nca files.",
+        "LAS Recomp needs the extracted exefs and romfs folders, not .xci, .nsp or .nca files.",
         "Make sure there's about 12 GB free and try again.",
         "LAS Recomp needs version 1.0.0, 1.0.1 or 1.1.0 of the game.",
-        "Some of the game's files are missing - usually a copy or unzip that stopped partway. Copy the game files "
-        "again so none are missing, then choose the folder again.",
+        "Some of the game's files are missing, usually from a copy or unzip that stopped partway. Copy them again "
+        "and choose the folder again.",
         "Make sure there's about 2 GB free and try again. If it keeps happening, report it on GitHub."};
     if (k < 1 || k > 6) return;
     if (k == FAIL_MISSING && have >= 0) {
         char b[320];
-        snprintf(b, sizeof b, "The romfs folder has %d of the game's %d files - some are missing, usually from a copy or "
-                 "unzip that stopped partway. Copy the game files again so none are missing, then choose the folder "
-                 "again.", have, (int)ROMFS_FILES);
+        snprintf(b, sizeof b, "The romfs folder only has %d of the game's %d files, usually from a copy or unzip that "
+                 "stopped partway. Copy them again and choose the folder again.", have, (int)ROMFS_FILES);
         set_job(head[k], true, b);
         return;
     }
@@ -428,7 +428,7 @@ static bool build_game_code(void) {
     bool ok = gamebuild_run(g_root.c_str(), &o, why, sizeof why);
     if (!ok) {
         fprintf(stderr, "[launcher] game code: %s\n", why);
-        if (g_cancel_build) set_job("Compilation cancelled. Completed files are kept.");
+        if (g_cancel_build) set_job("Build cancelled. The finished parts are kept, so you can resume later.");
         else set_failure(FAIL_BUILD, -1, gamebuild_killed() ? why : NULL);
     }
     return ok;
@@ -511,8 +511,8 @@ static std::string picker_hint(const char *what) {
     std::string err = SDL_GetError();
     fprintf(stderr, "[launcher] %s window: %s\n", what, err.c_str());
 #ifdef __linux__
-    return std::string("LAS Recomp opens the ") + what + " window through your desktop's file chooser "
-           "(xdg-desktop-portal) or zenity. Install either one, then try again.";
+    return std::string("LAS Recomp needs xdg-desktop-portal or zenity to open the ") + what + " window. Install one "
+           "and try again.";
 #else
     return err;
 #endif
@@ -580,7 +580,7 @@ static int onedrive_notice(float s, float w, bool ready) {
     ImGui::PopStyleColor();
     ImGui::PushTextWrapPos(0);
     ImGui::TextColored(ImVec4(1, 0.72f, 0.4f, 1), "!  This folder is synced by OneDrive");
-    ImGui::TextColored(ImVec4(0.86f, 0.85f, 0.80f, 1), "All game files (about %.0f GB) will be uploaded to your OneDrive.",
+    ImGui::TextColored(ImVec4(0.86f, 0.85f, 0.80f, 1), "About %.0f GB of game files will upload to your OneDrive.",
                        fmax(1.0, gb));
     ImGui::PopTextWrapPos();
     ImGui::Dummy(ImVec2(0, 4 * s));
@@ -594,7 +594,7 @@ static int onedrive_notice(float s, float w, bool ready) {
         ImGui::EndDisabled();
         ImGui::SameLine();
     }
-    if (ImGui::Button("Keep here")) r = 1;
+    if (ImGui::Button("Keep it here")) r = 1;
     ImGui::EndChild();
     return r;
 }
@@ -666,15 +666,17 @@ static void import_fonts() {
         if (copied) ok++;
         else failed++;
     }
-    g_font_msg = std::to_string(ok) + " font file(s) imported" + (failed ? ", " + std::to_string(failed) + " couldn't be copied" : "") +
-                 (skipped ? ", " + std::to_string(skipped) + " not recognized" : "") + ". Used from the next game start.";
+    g_font_msg = std::to_string(ok) + (ok == 1 ? " font file" : " font files") + " imported" +
+                 (failed ? ", " + std::to_string(failed) + " couldn't be copied" : "") +
+                 (skipped ? ", " + std::to_string(skipped) + " not recognized" : "") +
+                 ". They load the next time you start the game.";
 }
 
 static void remove_fonts() {
     for (auto n : FONT_STD) unlink((std::string("fonts/") + n).c_str());
     for (auto n : FONT_LANG) unlink((std::string("fonts/") + n).c_str());
     for (auto n : FONT_EXT) unlink((std::string("fonts/") + n).c_str());
-    g_font_msg = "Imported fonts removed: the substitute fonts are used.";
+    g_font_msg = "Imported fonts removed. You're back on the substitute fonts.";
 }
 
 // ------------------------------------------------------------------ background: a title movie frame
@@ -806,9 +808,9 @@ static bool aspect_prompt(float s) {
         ImGui::SetCursorPosX((ImGui::GetWindowWidth() - 2 * bw - gap) * 0.5f);
         int pick = -1;
         ImGui::SetItemDefaultFocus();
-        if (ImGui::Button("Authentic 16:9", ImVec2(bw, 44 * s))) pick = ASPECT_ORIGINAL;
+        if (ImGui::Button("Original 16:9", ImVec2(bw, 44 * s))) pick = ASPECT_ORIGINAL;
         ImGui::SameLine(0, gap);
-        if (ImGui::Button("Unlocked (fill the screen)", ImVec2(bw, 44 * s))) pick = ASPECT_UNLOCKED;
+        if (ImGui::Button("Unlocked, fill the screen", ImVec2(bw, 44 * s))) pick = ASPECT_UNLOCKED;
         if (pick >= 0) {
             g_settings.aspect = pick;
             g_settings.aspect_asked = true;
@@ -842,7 +844,8 @@ static bool menu_tip(float s) {
         ImGui::TextUnformatted("LAS Recomp has its own menu for settings, the randomizer, cosmetics and more.");
         ImGui::Spacing();
         int fam = bind_label_family() % 3;
-        ImGui::Text("Open it in game with F1 or Esc, or on a controller with the %s (or %s together).", home[fam], pad[fam]);
+        ImGui::Text("Open it in game with F1 or Esc, or press the %s or %s together on a controller.", home[fam],
+                    pad[fam]);
         ImGui::PopTextWrapPos();
         ImGui::Dummy(ImVec2(0, 14 * s));
         ImGui::SetCursorPosX((ImGui::GetWindowWidth() - 180 * s) * 0.5f);
@@ -1170,7 +1173,7 @@ static void draw_busy_overlay(ImVec2 ds, const std::string &job, bool test_busy,
             g_prep_skip_ask = true;
     }
     if (preparing && g_prep_skip_ask && !g_prep_skip) {  // what Skip means, before it happens
-        const char *q = "Shaders will compile as you play, but you may experience some pop-in.";
+        const char *q = "Shaders will compile while you play instead, so expect some pop-in.";
         const char *yes = "Yes, skip", *no = "No, wait";
         ImVec2 qs = g_font_small->CalcTextSizeA(sfs, FLT_MAX, 0, q);
         ImVec2 ys = g_font_small->CalcTextSizeA(sfs, FLT_MAX, 0, yes), ns = g_font_small->CalcTextSizeA(sfs, FLT_MAX, 0, no);
@@ -1278,8 +1281,9 @@ static void data_folder_popup(float s) {
             close = ImGui::Button("Cancel", bw) || esc;
         } else {
             bool room = t.free >= t.need;
-            ImGui::Text("Move your saves, seeds, settings and game files (%.1f GB) there, or start fresh?", t.bytes / 1e9);
-            if (!room) ImGui::TextColored(red, "Not enough free space there to move them (%.1f GB free).", t.free / 1e9);
+            ImGui::Text("Move your saves, seeds, settings and game files there, %.1f GB in all, or start fresh?",
+                        t.bytes / 1e9);
+            if (!room) ImGui::TextColored(red, "Not enough space there. Only %.1f GB is free.", t.free / 1e9);
             ImGui::Spacing();
             ImGui::BeginDisabled(!room);
             if ((ImGui::Button("Move", bw) || g_df_auto_move) && room) {
@@ -1352,8 +1356,8 @@ static void prelaunch_tab(float sc) {
         ImGui::PushFont(g_font_menu);
         ImGui::TextColored(plastic_col(plastic_theme().warn), "Are you sure?");
         ImGui::PopFont();
-        ImGui::Text("This deletes LAS Recomp's copy of the game files (%.1f GB).", gb);
-        ImGui::TextDisabled("Saves, seeds and settings are kept. Your own game files aren't touched.");
+        ImGui::Text("This deletes LAS Recomp's %.1f GB copy of the game files.", gb);
+        ImGui::TextDisabled("Your saves, seeds and settings stay.");
         if (rt_dev_mode()) {  // (a source checkout: the files are the project's own extracted/)
             bool abs = !g_root.empty() && (g_root[0] == '/' || (g_root.size() > 1 && g_root[1] == ':'));
             std::string where = abs ? g_root : std::string(rt_data_root()) + "/" + g_root;
@@ -1364,7 +1368,8 @@ static void prelaunch_tab(float sc) {
             stop_background_prep();
             bool ok = rt_remove_game_files(g_root.c_str());  // (runtime/paths.c: only what the extraction made)
             game_files_changed();
-            set_job(ok ? "Game files deleted." : "Could not delete the game files (not in LAS Recomp's data folder?).", !ok);
+            set_job(ok ? "Game files deleted." : "Couldn't delete the game files. They aren't in LAS Recomp's data folder.",
+                    !ok);
             g_files_deleted = true, gb = -1;
             ImGui::CloseCurrentPopup();
         }
@@ -1392,21 +1397,20 @@ static void prelaunch_tab(float sc) {
     import_fonts();
     bool fs = have_font(FONT_STD, 4), fl = have_font(FONT_LANG, 8), fe = have_font(FONT_EXT, 2);
     ImGui::Text("Text: %s    Chinese / Korean: %s    Button icons: %s",
-                fs ? "Nintendo font (imported)" : "substitute (this OS's, per language)",
+                fs ? "Nintendo font (imported)" : "substitute",
                 fl ? "Nintendo font (imported)" : "substitute", fe ? "imported" : "substitute");
     ImGui::PushTextWrapPos(0);
-    ImGui::TextDisabled("Fonts aren't included. For the original look, import your own copies of "
-                        "nintendo_udsg-r_std_003.bfttf (text), the same-named files for Chinese and Korean "
-                        "(nintendo_udsg-r_org_zh-cn_003, nintendo_udsg-r_ext_zh-cn_003, nintendo_udjxh-db_zh-tw_003, "
-                        "nintendo_udsg-r_ko_003) and nintendo_ext_003.bfttf (button icons). "
-                        ".ttf versions with the same names work too.");
+    ImGui::TextDisabled("Nintendo's fonts aren't included. For the original look, import your own "
+                        "nintendo_udsg-r_std_003 for text, nintendo_udsg-r_org_zh-cn_003, nintendo_udsg-r_ext_zh-cn_003, "
+                        "nintendo_udjxh-db_zh-tw_003 and nintendo_udsg-r_ko_003 for Chinese and Korean, and "
+                        "nintendo_ext_003 for button icons. Both .bfttf and .ttf work.");
     ImGui::PopTextWrapPos();
     if (!g_font_msg.empty()) ImGui::TextWrapped("%s", g_font_msg.c_str());
     static const SDL_DialogFileFilter font_f[] = {{"Switch fonts", "bfttf;ttf"}};
     if (ImGui::Button("Import fonts")) SDL_ShowOpenFileDialog(picked_fonts, NULL, g_launcher_win, font_f, 1, NULL, true);
     if (fs || fl || fe) {
         ImGui::SameLine();
-        if (ImGui::Button("Use substitute font")) remove_fonts();
+        if (ImGui::Button("Remove imported fonts")) remove_fonts();
     }
     ImGui::Unindent(14 * sc);
 }
@@ -1944,13 +1948,13 @@ extern "C" void launcher_run(const char *root) {
                     dl->AddLine(ImVec2(x, cy), ImVec2(x + u * 0.35f, cy + u * 0.35f), g, fs * 0.11f);
                     dl->AddLine(ImVec2(x + u * 0.35f, cy + u * 0.35f), ImVec2(x + u, cy - u * 0.4f), g, fs * 0.11f);
                 };
-                std::string src_d = "The folder with your own extracted game files (exefs/romfs) of The Legend of Zelda: Link's "
-                                    "Awakening for Nintendo Switch. The game isn't included with LAS Recomp.";
+                std::string src_d = "Pick the folder with your extracted exefs and romfs from The Legend of Zelda: Link's "
+                                    "Awakening for Switch. LAS Recomp doesn't include the game.";
                 if (!src.empty()) src_d += "\n\nChosen: " + src;
                 // the step that's running / its result, under the rows and in the Set up row's explanation
                 const std::string &job_line = job;
-                std::string ex_d = "Copies the game files LAS Recomp needs and recompiles the game from them. This only "
-                                   "needs to be done once and may take a while. Your own files aren't changed.";
+                std::string ex_d = "Copies the files LAS Recomp needs and recompiles the game from them. You only do this "
+                                   "once, and it takes a while.";
                 if (!job.empty()) ex_d += "\n\n" + job + (job_hint.empty() ? "" : ".\n" + job_hint);
 
                 // the controller's cursor starts on the first row (not the X), a few frames while the window lays out
@@ -1971,7 +1975,7 @@ extern "C" void launcher_run(const char *root) {
                     opt_section("Set up");
                     if (busy || (src.empty() && !check_copied_files(g_root).empty())) opt_disable_next();
                     bool resume = !busy && src.empty() && resumable_build();
-                    if (opt_action(resume ? "Resume game code" : "Set up game files", busy ? "Working..." : "", ex_d.c_str(), true)) {
+                    if (opt_action(resume ? "Resume setup" : "Set up game files", busy ? "Working..." : "", ex_d.c_str(), true)) {
                         pthread_mutex_lock(&g_lock);
                         g_busy = true;
                         pthread_mutex_unlock(&g_lock);
@@ -1988,9 +1992,8 @@ extern "C" void launcher_run(const char *root) {
                     snprintf(gb, sizeof gb, "%.1f GB", files_gb);
                     opt_section("Game files");
                     if (!g_confirm_delete) {
-                        if (opt_action("Delete game files", gb, "Frees the space LAS Recomp's copy of the game files takes. "
-                                       "Saves, seeds and settings are kept, and your own game files aren't touched: you can "
-                                       "set the game files up again from them.", true))
+                        if (opt_action("Delete game files", gb, "Frees up the space LAS Recomp's copy of the game files "
+                                       "uses. Your saves, seeds and settings stay.", true))
                             g_confirm_delete = true;
                         first_row();
                     } else {
@@ -2000,8 +2003,7 @@ extern "C" void launcher_run(const char *root) {
                             game_files_changed();
                             status = check_game_files(g_root);
                             if (ok) set_job("Game files deleted.");
-                            else set_job("Couldn't delete the game files", true, "They aren't in LAS Recomp's data folder, "
-                                         "so they were left alone.");
+                            else set_job("Couldn't delete the game files. They aren't in LAS Recomp's data folder.", true);
                             if (!status.empty()) g_bg = 0;
                             g_confirm_delete = false, files_gb = -1;
                         }
@@ -2018,12 +2020,12 @@ extern "C" void launcher_run(const char *root) {
                 }
                 if (!busy && has_build_cache()) {
                     opt_section("Build cache");
-                    if (opt_action("Clear build cache", "", "Removes the saved game-code build files. The next setup compiles "
-                                   "everything again.", true)) {
+                    if (opt_action("Clear build cache", "", "Deletes the built game code. It gets rebuilt the next time you "
+                                   "set up.", true)) {
                         char why[512] = "";
                         g_build_cache_changed = true;
                         if (build_cache_clear(g_root.c_str(), why, sizeof why)) set_job("Build cache cleared.");
-                        else set_job("Could not clear the build cache.", true, why);
+                        else set_job("Couldn't clear the build cache.", true, why);
                     }
                 }
                 if (!job_line.empty()) {  // the current step / result
