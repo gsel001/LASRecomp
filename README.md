@@ -204,6 +204,7 @@ without touching the installed game, your game files or your saves.
 - **[@gsel001](https://github.com/gsel001)** - a check in CI that the Mac app starts (#420), and rupees up to 9,999 in the
   cheats and save editor (#453)
 - **[@wimw85](https://github.com/wimw85)** - much faster game code setup on the Steam Deck and other PCs (#434)
+- **[@missionfloyd](https://github.com/missionfloyd)** - a much smaller game code build, without debug info (#487)
 
 Thanks also to everyone who reports issues and tests builds. Your logs and screenshots find most of the bugs.
 
