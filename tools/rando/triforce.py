@@ -84,7 +84,7 @@ def complete_text(wait):
 
 
 def egg_text(wait):
-    return (b'The egg stays silent...' + wait + _PAGE + b'This dream ends only when the ' + _COLOR_ON + b'Triforce' +
+    return (b'The egg stays silent...' + wait + _PAGE + b'This dream ends only when the\n' + _COLOR_ON + b'Triforce' +
             _COLOR_OFF + b' is whole.' + wait + b'\0')
 
 
