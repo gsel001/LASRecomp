@@ -123,6 +123,23 @@ static float g_thunder_gain, g_flash_k = 1;  // (k: the flash's strength - a str
 static uint32_t g_rng = 0x1234567;
 static float frand(void) { g_rng = mix32(g_rng + 0x9E3779B9u); return (g_rng >> 8) / 16777216.0f; }
 
+// A thunderclap: the stone rumble (menu_sfx.c), each one its own - a little higher or lower, darker the farther, the
+// roll from its start or from further in, cut shorter or left long, now and then a second roll on top; one close by
+// (near: a strike here) a crack first, the roll right on it, bright
+static void thunder(float gain, bool near) {
+    float rate = 0.82f + frand() * 0.36f;  // (about 3 semitones either way)
+    if (near) {
+        menu_sfx_play_ex(MENU_SFX_THUNDER_CRACK, gain, 0.85f + frand() * 0.25f, 2200 + frand() * 2000, 0, 0, 0);
+        menu_sfx_play_ex(MENU_SFX_THUNDER, gain, rate, 0, 0, 0, 0.05f);
+        return;
+    }
+    float dark = 220 + frand() * 380, from = frand() * 0.3f, len = frand() < 0.4f ? 1.6f + frand() * 1.4f : 0;
+    menu_sfx_play_ex(MENU_SFX_THUNDER, gain, rate, dark, from, len, 0);
+    if (frand() < 0.35f)  // (a second roll, rolling on)
+        menu_sfx_play_ex(MENU_SFX_THUNDER, gain * (0.4f + frand() * 0.3f), 0.8f + frand() * 0.3f, dark * 0.8f,
+                         frand() * 0.4f, 0, 0.5f + frand() * 0.9f);
+}
+
 static float storm_flash(double t, uint64_t frame) {
     static long force_at = -2;  // LARECOMP_WEATHER_FLASH_AT=<frame> (test): a flash then
     if (force_at == -2) force_at = getenv("LARECOMP_WEATHER_FLASH_AT") ? atol(getenv("LARECOMP_WEATHER_FLASH_AT")) : -1;
@@ -136,7 +153,7 @@ static float storm_flash(double t, uint64_t frame) {
     }
     if (g_thunder_at >= 0 && t >= g_thunder_at) {
         g_thunder_at = -1;
-        menu_sfx_play_gain(MENU_SFX_THUNDER, g_thunder_gain);
+        thunder(g_thunder_gain, false);
         input_rumble_pulse((uint16_t)(g_thunder_gain * 22000), 0, 350);  // (a short low rumble; off with Rumble off)
     }
     // the flash: two quick strobes, then a fade (~0.6 s)
@@ -456,6 +473,8 @@ static void storm_strikes(void) {
             g_strike.seed = (uint32_t)(frand() * 16777216.0f);
             strike_build();
             g_next_strike = t + (every > 0 ? every : 20 + frand() * 20);
+            for (int k = 0; k < 3; k++)  // (the crackle on the ground: the Buzz Blob's spark, three times as it grows)
+                menu_sfx_play_ex(MENU_SFX_SPARK, 0.7f + 0.3f * k, 0.85f + frand() * 0.3f, 0, 0, 0, k * 0.33f + frand() * 0.1f);
             LOG("[weather] lightning at %.2f %.2f %.2f (%s Link)\n", g_strike.x, g_strike.y, g_strike.z, at_link ? "at" : "near");
         }
     }
@@ -464,7 +483,7 @@ static void storm_strikes(void) {
         g_flash_at = t, g_flash_k = 1.6f;  // (a bright flash, the thunder right away and loud: it is here)
         g_thunder_at = -1;
         g_next_flash = fmax(g_next_flash, t + 4);
-        menu_sfx_play_gain(MENU_SFX_THUNDER, 1.0f);
+        thunder(1.0f, true);
         input_rumble_pulse(30000, 12000, 450);
         float p[3];
         bool hit = link_now(p) && hypotf(p[0] - g_strike.x, p[2] - g_strike.z) < 0.9f &&
