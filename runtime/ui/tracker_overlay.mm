@@ -9,9 +9,11 @@
 //            labelled by the dungeon reached there; room shuffle: a moved room's checks count for the dungeon it sits
 //            in now (tools/rando/tracker.py)
 //   list     A on a bullet: the area's checks in one list by status (open in logic, needs an item with the cheapest
-//            missing items, trick logic, collected struck out); A on a row shows that check's spot, B goes back
-//   filters  "In logic now" (on by default), "Hide checked" and one toggle per kind of check in the seed. Filters only
-//            change the bullets, never a list. Game-styled: a line in the game's button row, a filter panel on Y
+//            missing items, trick logic, collected struck out); with "In logic now" on, only the ones in logic. A on a
+//            row shows that check's spot, B goes back
+//   filters  "In logic now" (on by default), "Hide checked" and one toggle per kind of check in the seed. The kind
+//            toggles and "Hide checked" only change the bullets. Game-styled: a line in the game's button row, a filter
+//            panel on Y
 //   input    while it drives, the left stick / d-pad, A and Y never reach the game, B neither while a list, a shown
 //            spot or the filters are up (runtime/hle/input.c -> tracker_map_input); the right stick still zooms /
 //            scrolls the game's map; ZR hands the page back to the game's own map (warp points, pins). The mouse
@@ -1313,16 +1315,19 @@ static int draw_list(ImDrawList *dl, ImFont *font, float ox, float oy, float u, 
         }
     }
     dl->PopClipRect();
+    if (rows.empty()) dl->AddText(font, fs_r, ImVec2(x, top + 8 * u), ink2, "Nothing in logic here right now.");
     dl->AddText(font, 16 * u, ImVec2(x, z.y - 36 * u), IM_COL32(0x4A, 0x30, 0x20, 255), v.foot);
     *close = (click && !in_panel) || rclick;
     return chosen;
 }
 
-// the rows of a list: open in logic, needs an item, trick logic, collected (struck out, last)
-static void list_rows(const std::vector<int> &list, std::vector<Row> &rows) {
+// the rows of a list: open in logic, needs an item, trick logic, collected (struck out, last); "In logic now": only the
+// ones in logic
+static void list_rows(const std::vector<int> &list, std::vector<Row> &rows, int f) {
     rows.clear();
     static const int order[4] = {0, 2, 1, 3};  // (by St: logic 0, trick 2, needs 1, done 3)
-    for (int i : list) rows.push_back({i, g_status[i]});
+    for (int i : list)
+        if (!(f & F_IN_LOGIC) || g_status[i] == ST_LOGIC) rows.push_back({i, g_status[i]});
     std::stable_sort(rows.begin(), rows.end(), [](const Row &a, const Row &b) {
         if (order[a.st] != order[b.st]) return order[a.st] < order[b.st];
         const Check &x = g_checks[a.check], &y = g_checks[b.check];
@@ -1501,7 +1506,7 @@ extern "C" void tracker_overlay_draw(ImVec2 display, ImFont *font) {
     auto build_rows = [&]() {
         rows.clear();
         const std::vector<int> *list = ui.panel || ui.spot >= 0 ? panel_list(ui.panel_type, ui.panel_id) : nullptr;
-        if (list) list_rows(*list, rows);
+        if (list) list_rows(*list, rows, filters());
     };
     build_rows();
 
@@ -1677,14 +1682,15 @@ extern "C" void tracker_overlay_draw(ImVec2 display, ImFont *font) {
 
     // ---- the list (one list by status)
     if (ui.panel) {
-        if (rows.empty() && !panel_list(ui.panel_type, ui.panel_id)) ui.panel = false;
+        const std::vector<int> *list = panel_list(ui.panel_type, ui.panel_id);
+        if (!list) ui.panel = false;
         else {
             int done = 0;
-            for (auto &r : rows) done += r.st == ST_DONE;
+            for (int i : *list) done += g_status[i] == ST_DONE;
             ListView v;
             v.title = title_of(ui.panel_type, ui.panel_id);
             char sub[64];
-            snprintf(sub, sizeof sub, L("%d / %d found"), done, (int)rows.size());
+            snprintf(sub, sizeof sub, L("%d / %d found"), done, (int)list->size());
             v.sub = sub;
             v.filt = filter_label(filter_word);
             if (ui.panel_type == 1) v.pills = dungeon_pills(g_groups[ui.panel_id].label);
@@ -1797,7 +1803,7 @@ extern "C" void tracker_dungeon_draw(ImVec2 display, ImFont *font) {
     std::vector<Chip> chips = make_chips();
     if (ui.chip >= (int)chips.size()) ui.chip = (int)chips.size() - 1;
     std::vector<Row> rows;
-    list_rows(all, rows);
+    list_rows(all, rows, f);
     auto open_list = [&](const std::string &cell) {
         ui.panel = true, ui.panel_type = 1, ui.panel_row = 0, ui.panel_scroll = 0, ui.filter_focus = false;
         for (size_t i = 0; i < rows.size(); i++)
@@ -1947,11 +1953,11 @@ extern "C" void tracker_dungeon_draw(ImVec2 display, ImFont *font) {
     if (ui.filter_focus) draw_filter_panel(dl, font, ox, oy, u, f, mouse, mouse_moved, click);
     if (ui.panel) {
         int found = 0;
-        for (auto &r : rows) found += r.st == ST_DONE;
+        for (int i : all) found += g_status[i] == ST_DONE;
         ListView lvw;
         lvw.title = dungeon_name(dk);
         char sub[48];
-        snprintf(sub, sizeof sub, L("%d / %d found"), found, (int)rows.size());
+        snprintf(sub, sizeof sub, L("%d / %d found"), found, (int)all.size());
         lvw.sub = sub;
         lvw.filt = filter_label(filter_word);
         lvw.pills = dungeon_pills(dk);
