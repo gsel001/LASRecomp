@@ -196,7 +196,7 @@ static pthread_mutex_t g_link_lock = PTHREAD_MUTEX_INITIALIZER;
 static float g_link[3];       // Link's position as the game thread read it last (PlayerCollision +0x80: his feet)
 static double g_link_at;      // (host time then)
 static uint64_t g_link_n;     // (samples so far)
-static float g_wind[2];       // the wind's velocity now (world x, z per s: weather_wind, render thread)
+static float g_wind[2];       // a blizzard gust's velocity now - not its steady wind (world x, z per s: weather_wind, render thread)
 static double g_wind_at;      // (host time then)
 
 static double host_now(void) {
@@ -582,7 +582,7 @@ static void strike_tick(Cpu *c) {
     if (__atomic_exchange_n(&g_shock, 0, __ATOMIC_ACQ_REL) && ok) link_shock(c);
 }
 
-// ---- a blizzard's wind pushing Link (for a randomizer option to come: off by default - the Cosmetics tab's weather is
+// ---- a blizzard's gusts pushing Link (for a randomizer option to come: off by default - the Cosmetics tab's weather is
 // looks only). tools/patches.py WIND_PUSH_SITE: in his move, the frame's displacement summed, before the collision
 // move - a share of the wind's velocity added there (walls and ledges stop it like his walking; the stick works
 // against it). Only on the overworld in states 0/1/2/10/26 (link_free), not in a pit's pull or a knockback; weaker
@@ -617,23 +617,23 @@ void rt_wind_push(Cpu *c) {
 }
 
 // The wind: rain and storm blow steadily along x, snow drifts gently; a blizzard has a wind of its own and gusts -
-// 1-4 s after one dies down the next blows hard (8-12 world units / s) from a new direction for 4-8 s, ramped up and
-// back down smoothly. wind[0..1]: the drift so far (wrapped at the volume's size: the particles' positions wrap with it),
+// 0.5-2.5 s after one dies down the next blows hard (8-12 world units / s) from a new direction for 6-11 s, ramped
+// up and back down smoothly. wind[0..1]: the drift so far (wrapped at the volume's size: the particles' positions wrap with it),
 // wind[2..3]: the velocity now. LARECOMP_BLIZZARD_GUST=<s> (test): the first gust then, from LARECOMP_BLIZZARD_DIR
 // (degrees, 0 = screen right, 90 = screen up; every gust)
 static void weather_wind(WeatherFrame *f, int kind, double dt, float size) {
     static double dx, dz, gust_at = -1, gust_len;
     static float gust_ang, gust_str, base_ang;
-    float vx, vz;
+    float vx, vz, gx = 0, gz = 0;  // (gx, gz: a blizzard gust's share - what pushes Link)
     if (kind == WEATHER_BLIZZARD) {
         if (gust_at < 0) {
             gust_at = getenv("LARECOMP_BLIZZARD_GUST") ? atof(getenv("LARECOMP_BLIZZARD_GUST")) : t + 3;
             gust_ang = getenv("LARECOMP_BLIZZARD_DIR") ? (float)atof(getenv("LARECOMP_BLIZZARD_DIR")) * 0.0174533f : frand() * 6.2832f;
-            gust_len = 5, gust_str = 10, base_ang = frand() * 6.2832f;
+            gust_len = 7, gust_str = 10, base_ang = frand() * 6.2832f;
         }
         double a = t - gust_at;
         if (a > gust_len + 3.5) {  // (the next gust, from somewhere else)
-            gust_at = t + 1 + frand() * 3, gust_len = 4 + frand() * 4, gust_str = 8 + frand() * 4;
+            gust_at = t + 0.5 + frand() * 2, gust_len = 6 + frand() * 5, gust_str = 8 + frand() * 4;
             gust_ang += 1.2f + frand() * 3.9f;  // (at least ~70 degrees off the last)
             if (getenv("LARECOMP_BLIZZARD_DIR")) gust_ang = (float)atof(getenv("LARECOMP_BLIZZARD_DIR")) * 0.0174533f;
             a = t - gust_at;
@@ -642,8 +642,8 @@ static void weather_wind(WeatherFrame *f, int kind, double dt, float size) {
         env = env * env * (3 - 2 * env);  // (smooth ramps)
         base_ang += (float)dt * 0.05f;
         // screen right = world +x, screen up = world -z (the overworld's camera looks north)
-        vx = 2 * cosf(base_ang) + env * gust_str * cosf(gust_ang);
-        vz = -2 * sinf(base_ang) - env * gust_str * sinf(gust_ang);
+        gx = env * gust_str * cosf(gust_ang), gz = -env * gust_str * sinf(gust_ang);
+        vx = 2 * cosf(base_ang) + gx, vz = -2 * sinf(base_ang) + gz;
     } else {
         vx = kind == WEATHER_SNOW ? 0.6f : kind == WEATHER_STORM ? 8 : 3, vz = 0;
         gust_at = -1;
@@ -651,7 +651,7 @@ static void weather_wind(WeatherFrame *f, int kind, double dt, float size) {
     dx = fmod(dx + vx * dt, size), dz = fmod(dz + vz * dt, size);
     f->wind[0] = (float)dx, f->wind[1] = (float)dz, f->wind[2] = vx, f->wind[3] = vz;
     pthread_mutex_lock(&g_link_lock);  // (for the game thread: a blizzard's push on Link, wind_tick)
-    g_wind[0] = (float)vx, g_wind[1] = (float)vz, g_wind_at = host_now();
+    g_wind[0] = gx, g_wind[1] = gz, g_wind_at = host_now();
     pthread_mutex_unlock(&g_link_lock);
 }
 
