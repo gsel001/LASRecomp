@@ -14,6 +14,7 @@
 #include <string.h>
 #include <string>
 
+#include "i18n.h"
 #include "imgui_internal.h"
 #include "plastic.h"
 
@@ -657,7 +658,7 @@ bool plastic_close_corner(float bx, float scale) { return corner_button(bx, scal
 
 bool plastic_reset_corner(float bx, float scale) {
     bool r = corner_button(bx, scale, 1, true);
-    if (ImGui::IsItemHovered() || (ImGui::IsItemFocused() && GImGui->NavCursorVisible)) ImGui::SetTooltip("Reset to vanilla");
+    if (ImGui::IsItemHovered() || (ImGui::IsItemFocused() && GImGui->NavCursorVisible)) ImGui::SetTooltip("%s", L("Reset to vanilla"));
     return r;
 }
 

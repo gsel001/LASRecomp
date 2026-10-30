@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "imgui.h"
+#include "i18n.h"
 #include "option_rows.h"
 
 extern "C" {
@@ -66,7 +67,7 @@ extern "C" void cheats_frame(void) {
 
 extern "C" void cheats_draw(float scale) {
     if (!game_in_play()) {
-        ImGui::TextDisabled("Load a save to use cheats.");
+        ImGui::TextDisabled("%s", L("Load a save to use cheats."));
         return;
     }
     opt_begin("##cheats", scale);
@@ -96,7 +97,8 @@ extern "C" void cheats_draw(float scale) {
 
     opt_section("Companion");
     {  // save+0x555D: the follower (verified: setting it spawns that companion at the next screen / room load)
-        static const char *const names[] = {"None", "BowWow", "Marin", "Ghost", "Flying Rooster"};
+        static const char *const names[] = {LN("None"), LN("BowWow"), LN("Marin"), LN("Ghost"),
+                                             LN("Flying Rooster")};
         int cur = F<uint8_t>(0x555D);
         if (cur < 0 || cur > 4) cur = 0;
         if (opt_choice("Companion", &cur, names, 5, 0,

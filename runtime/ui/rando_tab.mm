@@ -4,6 +4,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +15,7 @@
 
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "i18n.h"
 #include "osk.h"
 #include "option_rows.h"
 #include "plastic.h"
@@ -35,6 +37,17 @@ static void play_seed(const char *name) {
     if (g_start_screen) { launcher_play_seed(name); return; }
     rando_select(name);
     rt_request_reboot(RT_REBOOT_GAME);
+}
+
+// printf into a std::string (a shown line from a translated format, i18n.h)
+static std::string strf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static std::string strf(const char *fmt, ...) {
+    char buf[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    return buf;
 }
 
 struct Seed { std::string name, spoiler, id; long mtime; bool race, race_done; };
@@ -244,7 +257,7 @@ static void seed_id_encode(GenOpts &o, char *out, size_t cap) {
     snprintf(out, cap, "%s", s.c_str());
 }
 
-// "" = ok (options + rng set), else what's wrong with the text
+// "" = ok (options + rng set), else what's wrong with the text (English: shown through L(), logged as it is)
 static std::string seed_id_decode(const char *text, GenOpts &o) {
     Bits x;
     int chars = 0;
@@ -254,21 +267,21 @@ static std::string seed_id_decode(const char *text, GenOpts &o) {
         if (ch == 'O') ch = '0';
         if (ch == 'I' || ch == 'L') ch = '1';
         const char *q = strchr(kB32, ch);
-        if (!q || !ch) return "That's not a seed ID. It has a character seed IDs don't use.";
-        if (chars == SEED_ID_BITS / 5) return "Too long for a seed ID.";
+        if (!q || !ch) return LN("That's not a seed ID. It has a character seed IDs don't use.");
+        if (chars == SEED_ID_BITS / 5) return LN("Too long for a seed ID.");
         x.put((uint64_t)(q - kB32), 5);
         chars++;
     }
     int bits = chars * 5;  // 30 characters (v5), 25 (v4), or 20 (v2 / v3)
     if (bits != SEED_ID_BITS && bits != SEED_ID_BITS_V4 && bits != SEED_ID_BITS_V3)
-        return "A seed ID has 30 characters.";
+        return LN("A seed ID has 30 characters.");
     uint32_t sum = 0;
     for (int i = 0; i < 5; i++) sum |= (uint32_t)x.b[bits - 5 + i] << i;
-    if (sum != id_check(x, bits - 5)) return "That ID has a typo somewhere.";
+    if (sum != id_check(x, bits - 5)) return LN("That ID has a typo somewhere.");
     x.n = 0;
     int ver = (int)x.get(4);
     if (bits == SEED_ID_BITS ? ver != SEED_ID_VERSION : bits == SEED_ID_BITS_V4 ? ver != 4 : ver != 2 && ver != 3)
-        return "This ID is from another LAS Recomp version.";
+        return LN("This ID is from another LAS Recomp version.");
     GenOpts t = o;
     t.rng = x.get(36);
     t.logic = (int)x.get(3); t.dungeon_items = (int)x.get(2); t.keysanity = (int)x.get(2); t.traps = (int)x.get(3);
@@ -285,7 +298,7 @@ static std::string seed_id_decode(const char *text, GenOpts &o) {
     else t.tri_needed = t.tri_extra = 0;
     if (t.room_shuffle > 3 || t.shopsanity > 2 || t.logic > 4 || t.traps > 4 || t.seashells > 5 || t.tunic >= 14 ||
         t.entrances > 3 || t.start_rupees > 999 || t.tri_needed > 50 || t.tri_extra > 2)
-        return "Not a valid seed ID.";
+        return LN("Not a valid seed ID.");
     t.ohko = false;
     // retired choices (older IDs still load): logic is always basic, story scenes always skipped, tier 3
     // (+ connector caves) is part of tier 2 now, and the Coherent room shuffle (1) is Coupled
@@ -349,7 +362,7 @@ static std::string hash_names(const std::string &id) {
     int h[5];
     seed_hash(id.c_str(), h);
     std::string r;
-    for (int i = 0; i < 5; i++) r += std::string(i ? ", " : "") + kSeedHashIcons[h[i]].name;
+    for (int i = 0; i < 5; i++) r += std::string(i ? ", " : "") + L(kSeedHashIcons[h[i]].name);
     return r;
 }
 
@@ -412,7 +425,7 @@ static void start_generation(void) {
         "\"50-seashell-reward\"", ""};
     std::string req = dir + "/request.json";
     FILE *f = fopen(req.c_str(), "w");
-    if (!f) { g_gen_status = "Couldn't write " + req + "."; g_gen_failed = g_gen_done = true; return; }
+    if (!f) { g_gen_status = strf(L("Couldn't write %s."), req.c_str()); g_gen_failed = g_gen_done = true; return; }
     fprintf(f, "{\"seed\": \"%s\", \"logic\": \"basic\", \"dungeon-items\": \"%s\", \"traps\": \"%s\",\n", id,
             ditems[g_opts.dungeon_items], traps[g_opts.traps]);
     fprintf(f, " \"shuffle-instruments\": %s, \"shuffle-dungeons\": %s, \"randomize-enemies\": %s, \"randomize-music\": %s,\n",
@@ -490,7 +503,7 @@ static void start_generation(void) {
     int rc = !g_gen_pid;
     g_gen_seed = g_opts.seed;
     g_gen_failed = g_gen_done = rc != 0;
-    g_gen_status = rc ? "Couldn't start the seed generator. rando-gen might be missing." : "Starting...";
+    g_gen_status = rc ? L("Couldn't start the seed generator. rando-gen might be missing.") : L("Starting...");
     g_gen_frac = 0;
     g_gen_start = ImGui::GetTime();
     if (rc) g_gen_pid = 0;
@@ -505,17 +518,17 @@ static void poll_generation(void) {
         std::string line = log.substr(p + 7, e == std::string::npos ? std::string::npos : e - p - 7);
         g_gen_frac = (float)atof(line.c_str());
         size_t sp = line.find(' ');
-        if (sp != std::string::npos) g_gen_status = line.substr(sp + 1) + "...";
+        if (sp != std::string::npos) g_gen_status = L_line(line.substr(sp + 1)) + "...";
     }
     int st = plat_proc_wait(g_gen_pid, false);
     if (st >= 0) {
         g_gen_pid = 0;
         g_gen_failed = st != 0;
         g_gen_done = true;
-        g_gen_status = g_gen_failed ? "Seed generation failed. The details are in rando/" + g_gen_seed + "/generate.log."
-                                    : "Seed \"" + g_gen_seed + "\" ready.";
+        g_gen_status = g_gen_failed ? strf(L("Seed generation failed. The details are in rando/%s/generate.log."), g_gen_seed.c_str())
+                                    : strf(L("Seed \"%s\" ready."), g_gen_seed.c_str());
         size_t e = g_gen_failed ? log.rfind("\nerror ") : std::string::npos;  // (a reason the player can act on)
-        if (e != std::string::npos) g_gen_status = log.substr(e + 7, log.find('\n', e + 1) - e - 7);
+        if (e != std::string::npos) g_gen_status = L_line(log.substr(e + 7, log.find('\n', e + 1) - e - 7));
         g_scanned = false;
         g_opts.seed[0] = 0;
         g_opts.rng = new_rng();  // next seed: a fresh ID
@@ -561,13 +574,13 @@ static void gen_overlay(float scale) {
             ImGui::TextColored(plastic_col(plastic_theme().warn), "%s", g_gen_status.c_str());
             ImGui::PopTextWrapPos();
             ImGui::Spacing();
-            if (ImGui::Button("Close", ImVec2(bw, 0))) close = true;
+            if (ImGui::Button(L("Close"), ImVec2(bw, 0))) close = true;
             ImGui::SetItemDefaultFocus();
         } else {
-            ImGui::TextUnformatted("Seed ready.");
-            ImGui::ProgressBar(1, ImVec2(-1, 0), "Done");
+            ImGui::TextUnformatted(L("Seed ready."));
+            ImGui::ProgressBar(1, ImVec2(-1, 0), L("Done"));
             ImGui::Spacing();
-            if (ImGui::Button("Play now", ImVec2(bw, 0)) || test_play) {  // (switches in place: the game reboots on the new seed)
+            if (ImGui::Button(L("Play now"), ImVec2(bw, 0)) || test_play) {  // (switches in place: the game reboots on the new seed)
                 g_gen_done = false;
                 g_gen_status.clear();
                 ImGui::CloseCurrentPopup();
@@ -575,7 +588,7 @@ static void gen_overlay(float scale) {
             }
             ImGui::SetItemDefaultFocus();
             ImGui::SameLine();
-            if (ImGui::Button("Close", ImVec2(bw, 0))) close = true;
+            if (ImGui::Button(L("Close"), ImVec2(bw, 0))) close = true;
         }
         if (close || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
             g_gen_done = false;
@@ -593,8 +606,9 @@ static std::string g_spoiler_seed;  // seed whose spoiler page is open
 // left with a new seed's name, ID and Generate seed under them; the chosen category's rows (or the seed list, or a
 // seed's actions) on the right. Each category's rows are in their own function below.
 enum { CAT_SEEDS, CAT_PRESETS, CAT_GENERAL, CAT_GOAL, CAT_ITEMS, CAT_EXTRA, CAT_WORLD, CAT_ENEMIES, CAT_COMPANIONS, CAT_FUN, CAT_OTHER, N_CAT };
-static const char *const k_cat_name[N_CAT] = {"Seeds", "Presets", "General", "Goal", "Items", "Extra checks", "World",
-                                              "Enemies & bosses", "Companions", "Fun and Wacky", "Other"};
+static const char *const k_cat_name[N_CAT] = {LN("Seeds"), LN("Presets"), LN("General"), LN("Goal"), LN("Items"),
+                                              LN("Extra checks"), LN("World"), LN("Enemies & bosses"), LN("Companions"),
+                                              LN("Fun and Wacky"), LN("Other")};
 static int g_cat = CAT_GENERAL;
 static bool g_in_right;            // the cursor is in the right column (last frame)
 static int g_last_frame = -10;     // (a frame without this tab: the cursor starts over)
@@ -641,7 +655,7 @@ static void rows_goal(void) {
                    "Collect Triforce pieces to win. The last one you need rolls the credits, no Wind Fish required."))
         g_opts.tri_needed = hunt ? (g_tri_mode < 3 ? kTriPresets[g_tri_mode] : g_tri_custom) : 0;
     opt_indent(1);
-    static const char *const pn[] = {"3", "12", "24", "Custom"};
+    static const char *const pn[] = {"3", "12", "24", LN("Custom")};
     if (!hunt) opt_disable_next();
     if (opt_choice("Pieces needed", &g_tri_mode, pn, 4, 2, "How many Triforce pieces you need to win.", false))
         g_opts.tri_needed = g_tri_mode < 3 ? kTriPresets[g_tri_mode] : g_tri_custom;
@@ -653,7 +667,7 @@ static void rows_goal(void) {
         take_focus(FOCUS_TRI);
         opt_indent(-1);
     }
-    static const char *const ex[] = {"None", "+25%", "+50%"};
+    static const char *const ex[] = {LN("None"), "+25%", "+50%"};
     if (!hunt) opt_disable_next();
     opt_choice("Extra pieces", &g_opts.tri_extra, ex, 3, 0,
                "Hides extra pieces on top of the ones you need, so you can skip some.");
@@ -677,11 +691,11 @@ static void rows_items(void) {
                "gaps this can help cross that a normal Hookshot couldn't.");
     opt_toggle("Bomb Bag", &g_opts.bomb_bag, false, "You must find your bomb bag to collect and carry bombs.");
     opt_toggle("Powder Bag", &g_opts.powder_bag, false, "You must find your powder bag to collect and carry Magic Powder.");
-    static const char *traps[] = {"None", "Few", "Several", "Many", "Trapsanity"};
+    static const char *traps[] = {LN("None"), LN("Few"), LN("Several"), LN("Many"), LN("Trapsanity")};
     opt_choice("Traps", &g_opts.traps, traps, 5, 1, "How many traps hide among the items.");
     opt_toggle("Chest looks match contents", &g_opts.chest_looks, false,
                "Chests with progression items look normal, key chests are blue and everything else is brown.");
-    static const char *shells[] = {"None", "Up to 5", "Up to 15", "Up to 30", "Up to 40", "All (50)"};
+    static const char *shells[] = {LN("None"), LN("Up to 5"), LN("Up to 15"), LN("Up to 30"), LN("Up to 40"), LN("All (50)")};
     opt_choice("Seashell Mansion rewards", &g_opts.seashells, shells, 6, 2,
                "How many seashells a progression item could be locked behind.");
     {
@@ -702,14 +716,14 @@ static void rows_extra_checks(void) {
     opt_toggle("Shellsanity", &g_opts.shellsanity, false, "Every hidden Secret Seashell spot holds an item from the pool.");
     opt_toggle("Applesanity", &g_opts.apples, false, "Each apple tree holds 3 items from the pool.");
     opt_toggle("Rocksanity", &g_opts.rocks, false, "Every rock you can lift on the overworld hides an item from the pool.");
-    static const char *ksn[] = {"Off", "Small Keys", "Small + Nightmare", "All dungeon items"};
+    static const char *ksn[] = {LN("Off"), LN("Small Keys"), LN("Small + Nightmare"), LN("All dungeon items")};
     opt_choice("Keysanity", &g_opts.keysanity, ksn, 4, 0,
                "Dungeon keys can turn up anywhere in the world. The last choice does the same for every dungeon item. "
                "Keys only open doors in their own dungeon, and the Items screen shows how many you have for each.");
     opt_toggle("Potsanity", &g_opts.pots, false,
                "Every pot you can lift in houses, caves and dungeons hides an item, about 400 more checks. Pots you "
                "haven't checked yet are golden.");
-    static const char *shopn[] = {"Off", "Vanilla prices", "Random prices"};
+    static const char *shopn[] = {LN("Off"), LN("Vanilla prices"), LN("Random prices")};
     opt_choice("Shopsanity", &g_opts.shopsanity, shopn, 3, 0, "Everything in the Mabe Village shop is a check.");
     {  // stealing (LAS 'stealing' never / normal / always), only with Shopsanity
         opt_indent(1);
@@ -758,10 +772,10 @@ static void rows_world(float scale) {
         opt_indent(-1);
         if (last) ImGui::OpenPopup("##entlast");
         if (!opt_collecting() && ImGui::BeginPopupModal("##entlast", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
-            ImGui::TextUnformatted("Keep at least one kind of entrance shuffled, or turn the entrance randomizer off.");
+            ImGui::TextUnformatted(L("Keep at least one kind of entrance shuffled, or turn the entrance randomizer off."));
             ImGui::Spacing();
             ImGui::SetItemDefaultFocus();
-            if (ImGui::Button("OK", ImVec2(220 * scale, 0)) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
+            if (ImGui::Button(L("OK"), ImVec2(220 * scale, 0)) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
                 ImGui::IsKeyPressed(ImGuiKey_Escape, false))
                 ImGui::CloseCurrentPopup();
             ImGui::EndPopup();
@@ -769,7 +783,7 @@ static void rows_world(float scale) {
     }
     {  // dungeon room shuffle (dungeon-room-shuffle; seed ID 0 off / 2 coupled / 3 decoupled, 1 = the retired
        // Coherent, read as Coupled): Off by default
-        static const char *names[] = {"Off", "Coupled", "Decoupled"};
+        static const char *names[] = {LN("Off"), LN("Coupled"), LN("Decoupled")};
         static const int ids[] = {0, 2, 3};
         int i = g_opts.room_shuffle == 3 ? 2 : g_opts.room_shuffle ? 1 : 0;
         if (opt_choice("Dungeon room shuffle", &i, names, 3, 0,
@@ -800,7 +814,7 @@ static void rows_enemies(void) {
     opt_indent(1);
     {
         if (!g_opts.randomize_enemies) opt_disable_next();
-        static const char *const modes[] = {"Seeded", "Random"};
+        static const char *const modes[] = {LN("Seeded"), LN("Random")};
         opt_choice("Mode", &g_opts.enemy_mode, modes, 2, 0,
                    "Seeded keeps enemies the same every time. Random rerolls them whenever an area loads.");
     }
@@ -811,7 +825,7 @@ static void rows_enemies(void) {
     {  // (miniboss-frequency 0 normal / 1 double / 3 all: the retired 3x, 2, reads as All)
         opt_indent(1);
         if (!g_opts.randomize_enemies || !g_opts.enemy_minibosses) opt_disable_next();
-        static const char *const freq[] = {"Normal", "Double", "All"};
+        static const char *const freq[] = {LN("Normal"), LN("Double"), LN("All")};
         static const int ids[] = {0, 1, 3};
         int i = g_opts.miniboss_freq >= 2 ? 2 : g_opts.miniboss_freq;
         if (opt_choice("Mini-boss frequency", &i, freq, 3, 0,
@@ -889,7 +903,7 @@ static void seed_summary(float scale) {
         cat_rows(c, scale);
         opt_collect_end();
         if (v.empty()) continue;
-        items.push_back({true, k_cat_name[c], "", 0});
+        items.push_back({true, L(k_cat_name[c]), "", 0});
         for (const OptLine &l : v) items.push_back({false, l.label, l.value, l.indent});
     }
     char id[48];
@@ -932,11 +946,12 @@ static void seed_summary(float scale) {
     };
     ImVec2 p = ImGui::GetCursorScreenPos();
     float W = ImGui::GetContentRegionAvail().x;
-    p.y += draw(p, W, {false, "Seed", g_opts.seed[0] ? g_opts.seed : "Random", 0});
-    p.y += draw(p, W, {false, "Seed ID", id, 0});
+    p.y += draw(p, W, {false, L("Seed"), g_opts.seed[0] ? g_opts.seed : L("Random"), 0});
+    p.y += draw(p, W, {false, L("Seed ID"), id, 0});
     p.y += gap;
     // two columns while a middling entry still fits on one line of one (the longer ones go on under themselves)
-    float mid_w = font->CalcTextSizeA(fs, FLT_MAX, 0, "Seashell Mansion rewards: All (50)").x + fs * 0.5f;
+    std::string mid = std::string(L("Seashell Mansion rewards")) + ": " + L("All (50)");
+    float mid_w = font->CalcTextSizeA(fs, FLT_MAX, 0, mid.c_str()).x + fs * 0.5f;
     int cols = (W - fs) * 0.5f >= mid_w ? 2 : 1;
     float cw = cols == 2 ? (W - fs) * 0.5f : W;
     std::vector<float> hs(items.size());
@@ -962,8 +977,7 @@ static void seed_summary(float scale) {
         const Item &it = items[i];
         if (it.head) {
             if (y > y0) y += gap;
-            std::string t = it.a;
-            for (char &c : t) c = (char)toupper((unsigned char)c);
+            std::string t = i18n_upper(it.a.c_str());
             dl->AddText(font, fs, ImVec2(x, y), pt.section, t.c_str());
             y += lh;
         } else {
@@ -1031,10 +1045,10 @@ static const std::vector<Builtin> &builtins(void) {
         {"boss_souls", {0, 0, 1, 1}}, {"miniboss_souls", {0, 0, 0, 1}}, {"no_buffs", {0, 0, 1, 1}},
     };
     static std::vector<Builtin> b = {
-        {"Easy", "Dungeon items from the start, no traps, Mabe Village open, 200 rupees.", {}},
-        {"Standard", "The default options, plus hints and chests that match their contents.", {}},
-        {"Hard", "Keysanity, shuffled entrances, rooms and instruments, random enemies, boss souls.", {}},
-        {"Chaos", "Every extra check and every shuffle.", {}},
+        {LN("Easy"), LN("Dungeon items from the start, no traps, Mabe Village open, 200 rupees."), {}},
+        {LN("Standard"), LN("The default options, plus hints and chests that match their contents."), {}},
+        {LN("Hard"), LN("Keysanity, shuffled entrances, rooms and instruments, random enemies, boss souls."), {}},
+        {LN("Chaos"), LN("Every extra check and every shuffle."), {}},
     };
     if (b[0].vals.empty())
         for (auto &r : t) for (int k = 0; k < 4; k++) b[k].vals.push_back({r.opt, r.v[k]});
@@ -1193,7 +1207,7 @@ static void rows_presets(void) {
         for (size_t i = 0; i < mine.size(); i++) if (mine[i].name == g_act_preset) at = (int)i;
         if (at < 0) { g_act_preset.clear(), g_preset_confirm_delete = false; return; }
         if (g_preset_confirm_delete) {
-            ImGui::TextColored(plastic_col(plastic_theme().warn), "Delete this preset?");
+            ImGui::TextColored(plastic_col(plastic_theme().warn), "%s", L("Delete this preset?"));
             ImGui::Spacing();
             opt_warn_next();
             if (opt_action("Delete preset", "", NULL)) {
@@ -1216,7 +1230,7 @@ static void rows_presets(void) {
             bool taken = false;
             for (const UserPreset &p : mine) if (p.name == to && p.name != mine[at].name) taken = true;
             for (const Builtin &b : builtins()) if (to == b.name) taken = true;
-            if (taken) g_preset_msg = "A preset named \"" + to + "\" already exists.";
+            if (taken) g_preset_msg = strf(L("A preset named \"%s\" already exists."), to.c_str());
             else if (!to.empty() && to != mine[at].name) {
                 mine[at].name = to, g_act_preset = to, g_preset_msg.clear();
                 user_presets_store(mine);
@@ -1229,11 +1243,11 @@ static void rows_presets(void) {
         }
         if (opt_action("Delete", "", NULL)) g_preset_confirm_delete = true, g_focus = FOCUS_CANCEL;
         take_focus(FOCUS_DELETE);
-        if (!g_preset_msg.empty()) { opt_disable_next(); opt_action(g_preset_msg.c_str(), "", NULL, false); }
+        if (!g_preset_msg.empty()) { opt_disable_next(); opt_shown_next(); opt_action(g_preset_msg.c_str(), "", NULL, false); }
         return;
     }
     if (!g_replace_preset.empty()) {  // Save as: the name exists
-        ImGui::TextColored(plastic_col(plastic_theme().warn), "Replace \"%s\"?", g_replace_preset.c_str());
+        ImGui::TextColored(plastic_col(plastic_theme().warn), L("Replace \"%s\"?"), g_replace_preset.c_str());
         ImGui::Spacing();
         if (opt_action("Replace", "", NULL)) {
             for (UserPreset &p : mine) if (p.name == g_replace_preset) p = current_as_preset(p.name.c_str());
@@ -1264,7 +1278,7 @@ static void rows_presets(void) {
         for (const Builtin &b : builtins()) if (n == b.name) builtin = true;
         bool exists = false;
         for (const UserPreset &p : mine) if (p.name == n) exists = true;
-        if (builtin) g_preset_msg = "\"" + n + "\" is a built-in preset. Pick another name.";
+        if (builtin) g_preset_msg = strf(L("\"%s\" is a built-in preset. Pick another name."), n.c_str());
         else if (exists) g_replace_preset = n, g_focus = FOCUS_CANCEL, g_preset_msg.clear();
         else if (!n.empty()) {
             mine.push_back(current_as_preset(n.c_str()));
@@ -1274,9 +1288,10 @@ static void rows_presets(void) {
         }
     }
     take_focus(FOCUS_SAVE_AS);
-    if (!g_preset_msg.empty()) { opt_disable_next(); opt_action(g_preset_msg.c_str(), "", NULL, false); }
+    if (!g_preset_msg.empty()) { opt_disable_next(); opt_shown_next(); opt_action(g_preset_msg.c_str(), "", NULL, false); }
     for (const UserPreset &p : mine) {
-        if (opt_action(p.name.c_str(), cur == p.name ? "Current" : "", "Use, rename, update or delete it.", false))
+        opt_shown_next();  // (the player's name for it)
+        if (opt_action(p.name.c_str(), cur == p.name ? L("Current") : "", "Use, rename, update or delete it.", false))
             g_act_preset = p.name, g_preset_confirm_delete = false, g_preset_msg.clear(), g_focus = FOCUS_RIGHT;
         if (g_focus == FOCUS_PRESET && p.name == g_focus_preset) take_focus(FOCUS_PRESET);
     }
@@ -1294,7 +1309,7 @@ static void rows_seeds(const char *active) {
         static char rename_buf[64];
         if (!opt_text_editing("Rename")) strlcpy(rename_buf, s.name.c_str(), sizeof rename_buf);
         if (g_confirm_delete) {
-            ImGui::TextColored(plastic_col(plastic_theme().warn), "Delete this seed and its save files?");
+            ImGui::TextColored(plastic_col(plastic_theme().warn), "%s", L("Delete this seed and its save files?"));
             ImGui::Spacing();
             opt_warn_next();
             if (opt_action("Delete seed and saves", "", NULL)) {
@@ -1319,7 +1334,7 @@ static void rows_seeds(const char *active) {
             std::string to_name = clean_name(rename_buf), to = "rando/" + to_name;
             struct stat sb;
             if (!to_name.empty() && to_name != s.name) {
-                if (!stat(to.c_str(), &sb)) g_gen_status = "A seed named \"" + to_name + "\" already exists.";
+                if (!stat(to.c_str(), &sb)) g_gen_status = strf(L("A seed named \"%s\" already exists."), to_name.c_str());
                 else if (rename(("rando/" + s.name).c_str(), to.c_str()) == 0) {
                     // (seeds made before seed IDs name their spoiler after the folder)
                     rename((to + "/spoiler_" + s.name + ".txt").c_str(), (to + "/spoiler_" + to_name + ".txt").c_str());
@@ -1341,11 +1356,12 @@ static void rows_seeds(const char *active) {
         play_seed("");
     for (const Seed &s : g_seeds) {
         bool is_active = active && s.name == active;
-        std::string d = "Seed ID: " + (s.id.empty() ? std::string("-") : s.id) +
-                        (s.race ? "\nRace mode. Seed hash: " + hash_names(s.id) : std::string()) +
-                        "\n\nPlay it, read its spoiler log, copy its ID to share, rename or delete it. Each seed has its "
-                        "own save files.";
-        if (opt_action(s.name.c_str(), is_active ? "Playing" : "", d.c_str(), false))
+        std::string d = strf(L("Seed ID: %s"), s.id.empty() ? "-" : s.id.c_str()) +
+                        (s.race ? "\n" + strf(L("Race mode. Seed hash: %s"), hash_names(s.id).c_str()) : std::string()) +
+                        "\n\n" + L("Play it, read its spoiler log, copy its ID to share, rename or delete it. Each seed "
+                                     "has its own save files.");
+        opt_shown_next();  // (the seed's name, as the player gave it)
+        if (opt_action(s.name.c_str(), is_active ? L("Playing") : "", d.c_str(), false))
             g_act_seed = s.name, g_confirm_delete = false, g_focus = FOCUS_RIGHT;
         if (g_focus == FOCUS_SEED && s.name == g_focus_seed) take_focus(FOCUS_SEED);
     }
@@ -1361,9 +1377,9 @@ static void seed_header(const char *active) {
     for (const Seed &s : g_seeds) {
         if (s.name != g_act_seed) continue;
         ImGui::TextColored(plastic_col(plastic_theme().title), "%s", s.name.c_str());
-        ImGui::TextDisabled("Seed ID: %s", s.id.empty() ? "-" : s.id.c_str());
-        if (s.race) ImGui::TextDisabled("Race mode. Seed hash: %s", hash_names(s.id).c_str());
-        if (active && s.name == active) ImGui::TextDisabled("Playing");
+        ImGui::TextDisabled(L("Seed ID: %s"), s.id.empty() ? "-" : s.id.c_str());
+        if (s.race) ImGui::TextDisabled(L("Race mode. Seed hash: %s"), hash_names(s.id).c_str());
+        if (active && s.name == active) ImGui::TextDisabled("%s", L("Playing"));
         ImGui::Spacing();
     }
 }
@@ -1420,6 +1436,9 @@ extern "C" void rando_tab_draw(float scale) {
         if (getenv("LARECOMP_TRI_RIGHT")) g_cat = CAT_GOAL, hook_focus = FOCUS_TRI, hook_frames = 10;
     }
     if (hook_frames > 0) hook_frames--, g_focus = hook_focus;
+    static const int cat_cycle = getenv("LARECOMP_RANDO_CAT_CYCLE") ? atoi(getenv("LARECOMP_RANDO_CAT_CYCLE")) : 0;
+    static int cat_frames;  // (test) <frames>: each category in turn, that many frames each (screenshot series)
+    if (cat_cycle > 0 && cat_frames++ % cat_cycle == 0) g_cat = cat_frames / cat_cycle % N_CAT;
 
     bool busy = g_gen_pid || g_gen_done;  // the generation overlay is up: the whole panel is greyed out under it
     // B / Esc in the right column: a step back (delete confirm -> the seed's actions -> the seed list -> the category);
@@ -1442,8 +1461,13 @@ extern "C" void rando_tab_draw(float scale) {
 
     opt_begin("##rando", scale);
     opt_compact();
-    std::string cur_preset = current_preset();  // (Seeds and Presets share a line: half rows, a long name cut short)
-    if (cur_preset.size() > 12) cur_preset = cur_preset.substr(0, 10) + "...";
+    std::string cur_preset = L(current_preset().c_str());  // (Seeds and Presets share a line: half rows, a long name cut short)
+    {  // (12 characters at most, cut between UTF-8 characters)
+        size_t chars = 0, cut = 0;
+        for (size_t i = 0; i < cur_preset.size(); i++)
+            if (((unsigned char)cur_preset[i] & 0xC0) != 0x80 && ++chars == 11) cut = i;
+        if (chars > 12) cur_preset = cur_preset.substr(0, cut) + "...";
+    }
     for (int c = 0; c < N_CAT; c++) {
         if (c == CAT_SEEDS) opt_pair_next();
         if (g_in_right && c == g_cat) opt_mark_next();
@@ -1471,9 +1495,9 @@ extern "C" void rando_tab_draw(float scale) {
         static std::string id_msg;
         if (!g_opts.rng) g_opts.rng = new_rng();
         if (!opt_text_editing("Seed ID")) seed_id_encode(g_opts, idbuf, sizeof idbuf);
-        std::string d = "Enter a shared seed ID to load its options. The same ID on the same LAS Recomp version always "
-                        "makes the same seed.";
-        if (!id_msg.empty()) d += "\n\n" + id_msg;
+        std::string d = L("Enter a shared seed ID to load its options. The same ID on the same LAS Recomp version always "
+                          "makes the same seed.");
+        if (!id_msg.empty()) d += std::string("\n\n") + L(id_msg.c_str());
         if (opt_text("Seed ID", idbuf, sizeof idbuf, "", d.c_str())) {
             GenOpts t = g_opts;
             id_msg = seed_id_decode(idbuf, t);
@@ -1483,7 +1507,7 @@ extern "C" void rando_tab_draw(float scale) {
                 g_opts = t;
                 strlcpy(g_opts.seed, keep, sizeof g_opts.seed);
                 tri_mode_from_opts();
-                id_msg = "Loaded. Your options now match this ID.";
+                id_msg = LN("Loaded. Your options now match this ID.");
             }
         }
         opt_pair_next();
@@ -1496,6 +1520,7 @@ extern "C" void rando_tab_draw(float scale) {
     bool summary = ImGui::IsItemHovered() || opt_item_nav_focused();  // (this row only: the right column sums up the options)
     if (!g_gen_status.empty() && !busy) {  // (e.g. a rename that failed)
         opt_disable_next();
+        opt_shown_next();  // (put together in the menus' language)
         opt_action(g_gen_status.c_str(), "", g_gen_status.c_str(), false);
     }
 

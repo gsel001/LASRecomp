@@ -52,6 +52,9 @@ void opt_mark_next(void);
 void opt_warn_next(void);
 void opt_button_next(void);  // the next row (one with a value too, or a text row) as a button
 void opt_own_next(void);  // the next row is the player's own setting, not part of a seed: the summary leaves it out
+// the next row's label and value are already in the menus' language (i18n.h: put together with L_line, or the
+// player's own text): shown as they are
+void opt_shown_next(void);
 // rows after this sit one step in (+1) or back out (-1): options that belong to the row above
 void opt_indent(int step);
 void opt_end(void);
