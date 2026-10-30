@@ -50,7 +50,9 @@ bool rando_tab_took_back(void);  // rando_tab.mm: B went back a step in the righ
 bool save_editor_took_back(void);  // save_editor.mm (the same)
 bool warp_tab_took_back(void);  // warp_tab.mm (the same)
 #include "../input_bind.h"
+#include "../livesplit.h"
 #include "../paths.h"
+#include "../rando.h"
 }
 
 // ------------------------------------------------------------------ state shared with the main thread
@@ -646,6 +648,66 @@ static void tab_quit(float scale, bool in_game) {
     opt_end();
 }
 
+// Reset to vanilla (the round arrow beside the close X): the game as Nintendo made it - 16:9, the Gameplay tab (but
+// its language and LiveSplit address), Cheats and Cosmetics at their defaults; Video / Audio otherwise and the controls
+// stay. A seed being played ends: the game boots again without it (as the Randomizer tab's Switch to vanilla).
+static void reset_to_vanilla(void) {
+    Settings &s = g_settings;
+    s.aspect = ASPECT_ORIGINAL;
+    s.cheat_hookshot = s.no_buff_drops = s.mirror_mode = false;
+    s.walk_speed = 1.0f, s.walk_speed_dungeons = false;
+    s.diff_damage = 1.0f, s.diff_ohko = false;
+    s.timer = false, s.timer_pos = TIMER_POS_LEFT;
+    if (s.livesplit) s.livesplit = false, livesplit_poke();
+    s.cheat_hearts = s.cheat_ammo = s.cheat_rupees = false;
+    for (CosColour *c : {&s.tunic, &s.hearts, &s.hair, &s.skin, &s.shield, &s.leaves, &s.grass, &s.sand, &s.water,
+                         &s.fences, &s.walls, &s.houses})
+        c->pick = COL_DEFAULT;
+    s.enemy_colours = 0, s.screen_filter = 0;
+    LOG("[menu] reset to vanilla%s\n", rando_seed_dir() ? " (leaving the seed)" : "");
+    settings_save();
+    if (rando_seed_dir()) {
+        rando_select("");
+        rt_request_reboot(RT_REBOOT_GAME);
+        set_open(false);
+    }
+}
+
+static void vanilla_popup(float scale) {
+    // LARECOMP_MENU_VANILLA=ask / reset / cancel (test): the question opens with the menu; reset / cancel press that
+    // button a few frames later
+    static const char *test = getenv("LARECOMP_MENU_VANILLA");
+    static int test_frames;
+    if (test && !test_frames++) ImGui::OpenPopup("##vanilla");
+    bool test_reset = test && test_frames == 30 && !strcmp(test, "reset");
+    bool test_cancel = test && test_frames == 30 && !strcmp(test, "cancel");
+    if (!ImGui::BeginPopupModal("##vanilla", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar))
+        return;
+    ImGui::PushFont(g_font_big);
+    ImGui::TextColored(plastic_col(plastic_theme().title), "Reset to vanilla?");
+    ImGui::PopFont();
+    ImGui::Spacing();
+    ImGui::TextUnformatted("This resets your settings to the vanilla game experience.\nYour controls stay as they are.");
+    if (rando_seed_dir()) {
+        ImGui::Spacing();
+        ImGui::TextUnformatted("This also ends the current randomizer seed.\nIts save files are kept.");
+    }
+    ImGui::Spacing();
+    ImGui::Spacing();
+    if (ImGui::Button("Reset", ImVec2(220 * scale, 0)) || test_reset) {
+        ImGui::CloseCurrentPopup();
+        reset_to_vanilla();
+    }
+    ImGui::SameLine();
+    ImGui::SetItemDefaultFocus();
+    if (ImGui::Button("Cancel", ImVec2(220 * scale, 0)) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
+        ImGui::IsKeyPressed(ImGuiKey_Escape, false) || test_cancel) {
+        LOG("[menu] reset to vanilla cancelled\n");
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
 extern "C" bool inventory_overlay_wanted(void);
 extern "C" bool tracker_overlay_wanted(void);
 extern "C" bool tracker_dungeon_wanted(void);
@@ -1138,6 +1200,8 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
         {
             float bx = 44 * scale;
             if (plastic_close_corner(bx, scale)) set_open(false);
+            if (plastic_reset_corner(bx, scale)) ImGui::OpenPopup("##vanilla");
+            vanilla_popup(scale);
         }
 
         bool any_popup = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId), typing = ui_text_busy();  // (before the
