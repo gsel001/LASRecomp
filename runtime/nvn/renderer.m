@@ -4841,11 +4841,33 @@ static void weather_encode(void) {
     }
     end_pass();
     st.rt_dirty = true;  // (the game's next draw opens its pass again)
-    // LARECOMP_WEATHER_TIME=1 (test): the pass in a command buffer of its own, its GPU time logged (mean, every 2 s)
+    // LARECOMP_WEATHER_TIME=1 (test): the pass' GPU time from timestamps at its vertex stage's start and its fragment
+    // stage's end (in place, in the frame's command buffer), logged as means every 120 frames. In game that includes
+    // waiting on the work before it and the GPU's low clocks at an easy 60 fps (~1.5 ms with nothing drawn at 4K):
+    // compare runs with LARECOMP_WEATHER_PARTS, not absolute numbers. Offline at full clocks the whole pass is ~0.1 ms
+    // at 4K (storm, blizzard)
     static int timing = -1;
-    if (timing < 0) timing = getenv("LARECOMP_WEATHER_TIME") != NULL;
-    if (timing) renderer_submit();
+    static id<MTLCounterSampleBuffer> tsb;
+    if (timing < 0) {
+        timing = getenv("LARECOMP_WEATHER_TIME") != NULL;
+        id<MTLCounterSet> ts = nil;
+        for (id<MTLCounterSet> c in timing ? dev.counterSets : @[]) if ([c.name isEqualToString:MTLCommonCounterSetTimestamp]) ts = c;
+        if (ts && [dev supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary]) {
+            MTLCounterSampleBufferDescriptor *d = [MTLCounterSampleBufferDescriptor new];
+            d.counterSet = ts, d.storageMode = MTLStorageModeShared, d.sampleCount = 2 * 64;
+            tsb = [dev newCounterSampleBufferWithDescriptor:d error:nil];
+        }
+        if (timing) LOG("[weather] timing: GPU timestamps %s\n", tsb ? "on" : "not available");
+    }
+    static uint32_t ts_slot;
+    uint32_t slot = ts_slot++ % 64;
     MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+    if (tsb) {
+        MTLRenderPassSampleBufferAttachmentDescriptor *sa = rp.sampleBufferAttachments[0];
+        sa.sampleBuffer = tsb;
+        sa.endOfVertexSampleIndex = sa.startOfFragmentSampleIndex = MTLCounterDontSample;
+        sa.startOfVertexSampleIndex = slot * 2, sa.endOfFragmentSampleIndex = slot * 2 + 1;
+    }
     rp.colorAttachments[0].texture = ct;
     rp.colorAttachments[0].loadAction = MTLLoadActionLoad;
     rp.colorAttachments[0].storeAction = MTLStoreActionStore;
@@ -4859,23 +4881,26 @@ static void weather_encode(void) {
     [e setVertexBuffer:probe offset:0 atIndex:1];
     [e setVertexTexture:dt atIndex:0];
     [e setFragmentTexture:dt atIndex:0];
-    if (wf.fill[3] < 1 || wf.fill[0] > 0) {  // (overcast, lightning)
+    static int parts = -1;  // LARECOMP_WEATHER_PARTS=<mask> (test, GPU cost A/B): 1 overcast, 2 drops / flakes,
+    // 4 splashes / lying flakes, 8 leaves, 16 kicked-up snow, 32 a lightning strike (default: all)
+    if (parts < 0) parts = getenv("LARECOMP_WEATHER_PARTS") ? atoi(getenv("LARECOMP_WEATHER_PARTS")) : 63;
+    if ((parts & 1) && (wf.fill[3] < 1 || wf.fill[0] > 0)) {  // (overcast, lightning)
         [e setRenderPipelineState:pipe[2]];
         [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     }
     [e setRenderPipelineState:pipe[0]];
-    [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4 instanceCount:wf.count];
-    probe_frame = frame;
-    if (wf.splashes) {
+    [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4 instanceCount:(parts & 2) ? wf.count : 1];
+    probe_frame = frame;  // (one drop at least: its first vertex reads the probes)
+    if (wf.splashes && (parts & 4)) {
         [e setRenderPipelineState:pipe[1]];
         [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4 instanceCount:wf.splashes];
     }
-    if (wf.leaf[3] > 0 && !dbg) {  // (a storm's leaves)
+    if (wf.leaf[3] > 0 && !dbg && (parts & 8)) {  // (a storm's leaves)
         [e setRenderPipelineState:pipe[4]];
         [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4 instanceCount:(NSUInteger)wf.leaf[3]];
     }
     StrikeFrame sk;
-    if (wf.kind == WEATHER_STORM && !dbg && weather_strike(&sk)) {  // (a lightning strike: its mark, sparks, the bolt)
+    if (wf.kind == WEATHER_STORM && !dbg && (parts & 32) && weather_strike(&sk)) {  // (a lightning strike: its mark, sparks, the bolt)
         [e setVertexBytes:&sk length:sizeof sk atIndex:3];
         [e setFragmentBytes:&sk length:sizeof sk atIndex:3];
         [e setRenderPipelineState:pipe[5]];
@@ -4885,7 +4910,7 @@ static void weather_encode(void) {
         [e setRenderPipelineState:pipe[7]];
         [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4 instanceCount:STRIKE_PTS - 1];
     }
-    if ((wf.kind == WEATHER_SNOW || wf.kind == WEATHER_BLIZZARD) && !dbg) {  // (the snow Link kicked up)
+    if ((wf.kind == WEATHER_SNOW || wf.kind == WEATHER_BLIZZARD) && !dbg && (parts & 16)) {  // (the snow Link kicked up)
         // (past setVertexBytes' 4 KB: a small shared buffer per frame in flight, 4 of them in turn)
         static id<MTLBuffer> pbuf[4];
         static int pnext;
@@ -4902,14 +4927,18 @@ static void weather_encode(void) {
     }
     [e endEncoding];
     stat_passes++;
-    if (timing) {
+    if (tsb) {
         static double sum;
         static int n;
+        id<MTLCounterSampleBuffer> b = tsb;
         [cmdbuf addCompletedHandler:^(id<MTLCommandBuffer> c) {
-            sum += c.GPUEndTime - c.GPUStartTime;
-            if (++n == 120) LOG("[weather] pass GPU time %.3f ms (mean of 120)\n", sum / n * 1000), sum = 0, n = 0;
+            (void)c;
+            NSData *d = [b resolveCounterRange:NSMakeRange(slot * 2, 2)];
+            const uint64_t *t = d.length >= 16 ? d.bytes : NULL;
+            if (!t || t[1] <= t[0] || t[0] == MTLCounterErrorValue) return;
+            sum += (double)(t[1] - t[0]);  // (ns on Apple GPUs)
+            if (++n == 120) LOG("[weather] pass GPU time %.3f ms (mean of 120)\n", sum / n / 1e6), sum = 0, n = 0;
         }];
-        renderer_submit();
     }
 }
 
