@@ -4272,7 +4272,7 @@ static void draw_one(CmdRec *r, bool indexed) {
 static const char *wx_src =
     "#include <metal_stdlib>\n"
     "using namespace metal;\n"
-    "struct WF { float4 vp[4]; float4 ivp[4]; float4 origin, box, shape, color, screen, flags, fill, zr, cam, wind; uint count, splashes; int kind; };\n"
+    "struct WF { float4 vp[4]; float4 ivp[4]; float4 origin, box, shape, color, screen, flags, fill, zr, cam, wind, leaf; uint count, splashes; int kind; };\n"
     "struct VO { float4 pos [[position]]; float2 uv; float a; };\n"
     "static uint pcg(uint v) { uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }\n"
     "static float h1(uint v) { return float(pcg(v)) * (1.0 / 4294967296.0); }\n"
@@ -4487,6 +4487,52 @@ static const char *wx_src =
     "  float3 c = mix(float3(0.62, 0.68, 0.8), w.color.rgb, saturate(1.2 - r * r));\n"
     "  return float4(c, in.a * (1.0 - smoothstep(0.55, 1.0, r)));\n"
     "}\n"
+    // a storm's leaves: each blows in from a hashed spot of the volume (in the world: it wraps like the drops), 2.5-4
+    // above the ground, along the wind with gusts of its own, tumbling (spin, and a flip: the quad narrows), down to
+    // the ground's height (weather.c's probes) where it lies 1.5 s and fades; then the next from somewhere else
+    "struct LO { float4 pos [[position]]; float2 uv; float a; };\n"
+    "vertex LO wx_leaf_vs(uint vid [[vertex_id]], uint iid [[instance_id]], constant WF &w [[buffer(0)]]) {\n"
+    "  LO o;\n"
+    "  float fall = 0.7 + 0.4 * h1(iid * 5u + 1u), hgt = 2.5 + 1.5 * h1(iid * 5u + 2u), rest = 1.5;\n"
+    "  float life = hgt / fall + rest, tt = w.box.z + h1(iid * 5u + 3u) * life;\n"
+    "  float cyc = floor(tt / life), a = tt - cyc * life;\n"
+    "  uint seed = iid * 7919u + uint(cyc) * 104729u;\n"
+    "  float fly = min(a, hgt / fall);\n"  // (time in the air: it lies still after)
+    "  float gust = 1.0 + 0.6 * sin(w.box.z * 0.9 + h1(seed) * 6.28) + 0.4 * sin(w.box.z * 2.3 + h1(seed + 1u) * 6.28);\n"
+    "  float2 drift = w.wind.zw * 0.55 * gust * fly;\n"
+    "  float sw = sin(fly * 3.1 + h1(seed + 2u) * 6.28) * 0.5;\n"  // (side to side)
+    "  float2 wd = length(w.wind.zw) > 0.01 ? normalize(w.wind.zw) : float2(1.0, 0.0);\n"
+    "  float3 sz = float3(w.box.x, 0.0, w.box.x);\n"
+    "  float3 lo = w.origin.xyz - 0.5 * sz;\n"
+    "  float2 xz = float2(h1(seed + 3u), h1(seed + 4u)) * w.box.x + drift + float2(-wd.y, wd.x) * sw;\n"
+    "  xz = lo.xz + fract((xz - lo.xz) / w.box.x) * w.box.x;\n"
+    "  float3 p = float3(xz.x, w.origin.w + hgt - fall * fly, xz.y);\n"
+    "  float ang = h1(seed + 5u) * 6.28 + fly * (3.0 + 4.0 * h1(seed + 6u)) * (h1(seed + 7u) > 0.5 ? 1.0 : -1.0);\n"
+    "  float flip = a < hgt / fall ? cos(fly * (4.0 + 3.0 * h1(seed + 8u))) : 1.0;\n"
+    "  float2 corner = float2((vid & 1u) ? 1.0 : -1.0, (vid & 2u) ? 1.0 : -1.0);\n"
+    "  float2 cr = float2(corner.x * max(abs(flip), 0.15), corner.y);\n"
+    "  cr = float2(cr.x * cos(ang) - cr.y * sin(ang), cr.x * sin(ang) + cr.y * cos(ang));\n"
+    "  float4 c = clip_of(w, p), ref = clip_of(w, w.origin.xyz);\n"
+    "  float size = 30.0 * (0.8 + 0.4 * h1(seed + 9u)) * w.screen.y / 1080.0 * clamp(ref.w / c.w, 0.5, 2.0);\n"
+    "  c.xy += cr * size / w.screen.xy * c.w;\n"
+    "  o.pos = c; o.uv = corner * 0.5 + 0.5;\n"
+    "  o.a = (1.0 - smoothstep(life - rest, life, a)) * smoothstep(0.0, 0.4, a) * wx_fade(w, p);\n"
+    "  return o;\n"
+    "}\n"
+    "fragment float4 wx_leaf_fs(LO in [[stage_in]], constant WF &w [[buffer(0)]], depth2d<float> dt [[texture(0)]],\n"
+    "                           texture2d<float> lt [[texture(1)]], sampler sm [[sampler(0)]]) {\n"
+    "  if (wx_hidden(w, dt, in.pos)) discard_fragment();\n"
+    "  float4 t;\n"
+    "  if (lt.get_width() > 1u) { t = lt.sample(sm, in.uv); if (w.leaf.r >= 0.0) t.rgb = w.leaf.rgb * max(t.r, max(t.g, t.b)); }\n"  // (the game's own leaf)
+    "  else {\n"  // (none found: a plain leaf - an almond with a midrib, lit from one side - in the leaves' colour)
+    "    float2 q = in.uv * 2.0 - 1.0;\n"
+    "    float e = q.x * q.x / (0.42 * (1.0 - q.y * q.y) + 1e-3) + q.y * q.y;\n"
+    "    float shade = (0.75 + 0.25 * q.x) * (1.0 - 0.3 * smoothstep(0.1, 0.0, abs(q.x)));\n"
+    "    float3 col = w.leaf.rgb.r < 0.0 ? float3(0.36, 0.62, 0.2) : w.leaf.rgb;\n"
+    "    t = float4(col * shade, 1.0 - smoothstep(0.8, 1.0, e));\n"
+    "  }\n"
+    "  return float4(t.rgb, t.a * in.a);\n"
+    "}\n"
     // the fill: out = rgb + picture * a (overcast, lightning)
     "vertex float4 wx_fill_vs(uint vid [[vertex_id]]) {\n"
     "  return float4(vid == 1u ? 3.0 : -1.0, vid == 2u ? 3.0 : -1.0, 0.0, 1.0);\n"
@@ -4533,7 +4579,7 @@ static void weather_encode(void) {
 
     // pipelines: by the window image's format
     static id<MTLLibrary> lib;
-    static id<MTLRenderPipelineState> pipe[4];  // particles, splashes, fill, kicked-up snow
+    static id<MTLRenderPipelineState> pipe[5];  // particles, splashes, fill, kicked-up snow, leaves
     static MTLPixelFormat pipe_fmt;
     id<MTLTexture> ct = view_texture(win, &st.rt.cview[0], st.rt.has_cview[0], true, nil);
     if (!ct) return;
@@ -4544,9 +4590,9 @@ static void weather_encode(void) {
     }
     if (pipe_fmt != ct.pixelFormat) {
         pipe_fmt = ct.pixelFormat;
-        static const char *const fn[4][2] = {{"wx_vs", "wx_fs"}, {"wx_splash_vs", "wx_splash_fs"}, {"wx_fill_vs", "wx_fill_fs"},
-                                             {"wx_puff_vs", "wx_puff_fs"}};
-        for (int i = 0; i < 4; i++) {
+        static const char *const fn[5][2] = {{"wx_vs", "wx_fs"}, {"wx_splash_vs", "wx_splash_fs"}, {"wx_fill_vs", "wx_fill_fs"},
+                                             {"wx_puff_vs", "wx_puff_fs"}, {"wx_leaf_vs", "wx_leaf_fs"}};
+        for (int i = 0; i < 5; i++) {
             MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
             pd.vertexFunction = [lib newFunctionWithName:@(fn[i][0])];
             pd.fragmentFunction = [lib newFunctionWithName:@(fn[i][1])];
@@ -4592,6 +4638,30 @@ static void weather_encode(void) {
     if (wf.splashes) {
         [e setRenderPipelineState:pipe[1]];
         [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4 instanceCount:wf.splashes];
+    }
+    if (wf.leaf[3] > 0 && !dbg) {  // (a storm's leaves: the game's own leaf - the one cut bushes throw - if found)
+        static NvnTexture *leaf_tex;
+        static double look_at;
+        extern NvnTexture *renderer_find_game_texture(const char *name);
+        if (!leaf_tex && now_ms() >= look_at) {  // (looked for again every 5 s until found)
+            look_at = now_ms() + 5000;
+            leaf_tex = renderer_find_game_texture(getenv("LARECOMP_LEAF_TEX") ? getenv("LARECOMP_LEAF_TEX") : "grass_01");
+            if (leaf_tex) LOG("[weather] leaf texture %ux%u format %#x\n", leaf_tex->width, leaf_tex->height, leaf_tex->format);
+        }
+        static id<MTLTexture> none;
+        static id<MTLSamplerState> smp;
+        if (!none) {
+            MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:1 height:1 mipmapped:NO];
+            none = [dev newTextureWithDescriptor:td];
+            MTLSamplerDescriptor *sd = [MTLSamplerDescriptor new];
+            sd.minFilter = sd.magFilter = MTLSamplerMinMagFilterLinear, sd.mipFilter = MTLSamplerMipFilterLinear;
+            smp = [dev newSamplerStateWithDescriptor:sd];
+        }
+        id<MTLTexture> lt = leaf_tex ? renderer_texture(leaf_tex, nil, false) : nil;
+        [e setRenderPipelineState:pipe[4]];
+        [e setFragmentTexture:lt ? lt : none atIndex:1];
+        [e setFragmentSamplerState:smp atIndex:0];
+        [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4 instanceCount:(NSUInteger)wf.leaf[3]];
     }
     if ((wf.kind == WEATHER_SNOW || wf.kind == WEATHER_BLIZZARD) && !dbg) {  // (the snow Link kicked up)
         SnowPuff pf[SNOW_PUFFS + 1];

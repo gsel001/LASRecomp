@@ -11,6 +11,7 @@
 #include "../game_addresses.h"
 #include "../hle.h"
 #include "../menu_sfx.h"
+#include "../cosmetic_colour.h"
 #include "../settings.h"
 
 extern int game_in_play(void);                 // runtime/hle/warp.c
@@ -380,6 +381,7 @@ bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PR
     // (screen, flags, zr: filled by the renderer)
     memset(f->origin, 0, sizeof f->origin), memset(f->box, 0, sizeof f->box), memset(f->shape, 0, sizeof f->shape);
     memset(f->color, 0, sizeof f->color), memset(f->fill, 0, sizeof f->fill), memset(f->cam, 0, sizeof f->cam);
+    memset(f->leaf, 0, sizeof f->leaf);
     f->count = f->splashes = 0;
     f->kind = kind;
     memcpy(f->vp, g_cam + 32, sizeof f->vp);
@@ -445,6 +447,13 @@ bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PR
         f->cam[3] = 0.35f;
         f->color[0] = 0.80f, f->color[1] = 0.85f, f->color[2] = 0.95f, f->color[3] = storm ? 0.34f : 0.28f;
         f->fill[3] = storm ? 0.84f : 0.93f;  // (overcast)
+        if (storm) {  // (a few leaves blowing about: the Leaves colour if one is set, else the texture's own)
+            uint32_t rgb;
+            if (col_target(&g_settings.leaves, COL_SLOT_LEAVES, &rgb))  // (sRGB to the scene's linear)
+                for (int i = 0; i < 3; i++) f->leaf[i] = powf((float)((rgb >> (16 - 8 * i)) & 0xFF) / 255.0f, 2.2f);
+            else f->leaf[0] = -1, f->leaf[1] = f->leaf[2] = 1;  // (-1: the game's own green / the texture's colour)
+            f->leaf[3] = 40;  // (in the volume, 34 x 34: ~15 on screen)
+        }
         if (storm) {
             float fl = storm_flash(t, frame);
             f->fill[0] = fl * 0.22f, f->fill[1] = fl * 0.25f, f->fill[2] = fl * 0.30f;

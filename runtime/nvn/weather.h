@@ -11,6 +11,7 @@
 //     through the world (the volume wraps around it), up to where it meets the scene under it (by the scene depth)
 //   - splashes: `splashes` instances, each what one drop (every count / splashes-th) left where it landed, for
 //     cam[3] s: rain a ring, snow the flake lying there
+//   - leaves (a storm): leaf[3] instances blowing along in the wind, tumbling, landing and fading
 //   - one full-screen triangle: rgb added, the picture multiplied by `keep` (overcast, lightning)
 // Metal: runtime/nvn/renderer.m (weather_encode). Vulkan: not yet (the setting does nothing there).
 #pragma once
@@ -32,6 +33,7 @@ typedef struct {
     float zr[4];       // the scene depth's range (the viewport's near, far - near; the renderer fills it)
     float cam[4];      // the camera (world xyz), w: how long a splash plays / a landed flake stays (s)
     float wind[4];     // the wind: how far it has carried everything so far (world x, z; wrapped), its velocity (x, z)
+    float leaf[4];     // the storm's blowing leaves: their colour (the Leaves setting's; r < 0: the game's own), w: how many
     uint32_t count, splashes;  // instances
     int kind;          // WEATHER_RAIN / WEATHER_SNOW / WEATHER_STORM / WEATHER_BLIZZARD
 } WeatherFrame;

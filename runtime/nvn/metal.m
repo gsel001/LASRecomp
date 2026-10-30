@@ -19,6 +19,7 @@
 #include "renderer.h"
 #include "pace.h"
 #include "texpatch.h"
+#include "recolour.h"
 #include "tex_hash.h"
 #include "screen_filter.h"
 
@@ -656,6 +657,20 @@ static void upload_texture(NvnTexture *t, TexBackend *b, id<MTLBlitCommandEncode
         }
     }
     if (own_cb) { [blit endEncoding]; [own_cb commit]; }
+}
+
+// A live texture holding the game's recolour texture `name` (runtime/nvn/recolour.c: one of the textures it knows from
+// the player's game files - e.g. the leaves cut bushes throw, "grass_01"), or NULL. Looks through the live textures
+// (sizes first, then contents: cheap); the weather's leaves use it (runtime/nvn/renderer.m)
+NvnTexture *renderer_find_game_texture(const char *name) {
+    for (int i = 0; i < g_reg_n; i++) {
+        NvnTexture *t = g_reg[i];
+        if (!t || !t->addr || t->depth > 1) continue;
+        int id = recolour_identify(t, tegra_total_size(&t->layout));
+        const char *n = id >= 0 ? recolour_name(TEXPATCH_RECOLOUR_BASE + id) : NULL;
+        if (n && !strcmp(n, name)) return t;
+    }
+    return NULL;
 }
 
 id<MTLTexture> renderer_texture(NvnTexture *t, id<MTLBlitCommandEncoder> blit, bool for_render) {
