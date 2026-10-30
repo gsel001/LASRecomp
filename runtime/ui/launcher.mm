@@ -640,7 +640,7 @@ static void import_fonts() {
     pthread_mutex_unlock(&g_lock);
     if (picks.empty()) return;
     mkdir("fonts", 0755);
-    int ok = 0, skipped = 0;
+    int ok = 0, skipped = 0, failed = 0;
     for (auto &src : picks) {
         std::string base = src.substr(src.find_last_of("/\\") + 1), low = base;  // (Windows paths use '\\' too)
         for (auto &c : low) c = (char)tolower(c);
@@ -649,18 +649,25 @@ static void import_fonts() {
         for (auto n : FONT_LANG) known |= low == n;
         for (auto n : FONT_EXT) known |= low == n;
         if (!known) { skipped++; continue; }
-        FILE *in = fopen(src.c_str(), "rb"), *out = fopen(("fonts/" + low).c_str(), "wb");
-        if (in && out) {
+        // Read all of it before fonts/ is written: the pick can be the file in fonts/ itself, and an unreadable pick
+        // must not empty the copy already there.
+        std::string data;
+        bool read_ok = false;
+        if (FILE *in = fopen(src.c_str(), "rb")) {
             char buf[65536];
             size_t n;
-            while ((n = fread(buf, 1, sizeof buf, in)) > 0) fwrite(buf, 1, n, out);
-            ok++;
+            while ((n = fread(buf, 1, sizeof buf, in)) > 0) data.append(buf, n);
+            read_ok = !ferror(in);
+            fclose(in);
         }
-        if (in) fclose(in);
-        if (out) fclose(out);
+        FILE *out = read_ok ? fopen(("fonts/" + low).c_str(), "wb") : NULL;
+        bool copied = out && fwrite(data.data(), 1, data.size(), out) == data.size();
+        if (out && fclose(out) != 0) copied = false;
+        if (copied) ok++;
+        else failed++;
     }
-    g_font_msg = std::to_string(ok) + " font file(s) imported" + (skipped ? ", " + std::to_string(skipped) + " not recognized" : "") +
-                 ". Used from the next game start.";
+    g_font_msg = std::to_string(ok) + " font file(s) imported" + (failed ? ", " + std::to_string(failed) + " couldn't be copied" : "") +
+                 (skipped ? ", " + std::to_string(skipped) + " not recognized" : "") + ". Used from the next game start.";
 }
 
 static void remove_fonts() {
