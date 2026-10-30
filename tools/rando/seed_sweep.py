@@ -47,8 +47,9 @@ FLAGS = ['bomb_bag', 'powder_bag', 'environments', 'pets_in_dungeons', 'skip_sto
          'hookshot_any', 'digs', 'miniboss_souls', 'no_start_sword', 'no_start_shield', 'no_start_ocarina',
          'tunic_upgrades', 'shellsanity', 'race', 'random_cosmetics', 'apples', 'chest_looks',
          'retired_key_rings',  # (key rings, removed: the slot stays so seed IDs keep their layout)
-         'hints', 'rocks', 'compass_differs', 'no_start_mambo']
-         # (order after random_cosmetics: apples, chest looks, retired key rings, hints, rocks, compass_differs, no_start_mambo)
+         'hints', 'rocks', 'fast_egg', 'compass_differs', 'no_start_mambo']
+         # (order after random_cosmetics: apples, chest looks, retired key rings, hints, rocks, fast_egg, compass_differs,
+         # no_start_mambo)
 ROOM_IDS = {'off': 0, 'coupled': 2, 'decoupled': 3}  # room_shuffle in the ID (1: the retired Coherent)
 BITS = 150  # (v5: 30 characters; v4 IDs had 125 - decode reads both)
 TIMEOUT = 900  # (seconds per seed)
@@ -152,7 +153,8 @@ def request(sid, o):
         'exclude': [f'{s}-seashell-reward' for s in shells[o['seashells']:]],
         **({'apples': True} if o.get('apples') else {}),
         **({'chest-looks': True} if o.get('chest_looks') else {}),
-        **({'hints': True} if o.get('hints') else {}), **({'rocks': True} if o.get('rocks') else {})}  # (only when on: seeds without it stay as they were)
+        **({'hints': True} if o.get('hints') else {}), **({'rocks': True} if o.get('rocks') else {}),
+        **({'fast-egg': True} if o.get('fast_egg') else {})}  # (only when on: seeds without it stay as they were)
 
 
 def stealing(o):

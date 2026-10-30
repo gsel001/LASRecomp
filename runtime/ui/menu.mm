@@ -50,7 +50,9 @@ bool rando_tab_took_back(void);  // rando_tab.mm: B went back a step in the righ
 bool save_editor_took_back(void);  // save_editor.mm (the same)
 bool warp_tab_took_back(void);  // warp_tab.mm (the same)
 #include "../input_bind.h"
+#include "../livesplit.h"
 #include "../paths.h"
+#include "../rando.h"
 }
 
 // ------------------------------------------------------------------ state shared with the main thread
@@ -535,22 +537,28 @@ static void tab_display(void) {
 extern "C" bool cosmetics_seed_on(void);  // runtime/cosmetics_seed.c
 
 // Cosmetics: tunic / heart colours, live (runtime/nvn/texpatch.c), and recolours by draw (runtime/nvn/recolour*.c);
-// a seed made with "Random cosmetics" fills the rows left on Default (shown as "Seed: <colour>")
+// a seed made with "Random cosmetics" has its own, and the page is locked while it's played (rows greyed out, showing
+// the seed's): the player's own choices stay saved for another seed or vanilla
 static void tab_cosmetics(void) {
     opt_begin("##cosmetics", ImGui::GetFontSize() / 34);
     CosColour *rows[] = {&g_settings.tunic, &g_settings.hearts, &g_settings.hair, &g_settings.skin, &g_settings.shield,
                          &g_settings.leaves, &g_settings.grass, &g_settings.sand, &g_settings.water,
                          &g_settings.fences, &g_settings.walls, &g_settings.houses};
-    if (opt_button("Randomize all", "Picks a random color for everything below."))
-        for (CosColour *c : rows) c->pick = 1 + rand() % (COL_RANDOM - 1);  // (a named colour: shown as what it is)
-    if (opt_button("Default all", "Puts everything on this page back to the game's normal look.")) {
-        for (CosColour *c : rows) c->pick = COL_DEFAULT;
-        g_settings.enemy_colours = 0;
-        g_settings.screen_filter = 0;
+    bool seed = cosmetics_seed_on();
+    if (seed) {
+        opt_disable_next();
+        opt_action("This seed picked your look. Commit to it!", "", NULL, false);
+    } else {
+        if (opt_button("Randomize all", "Picks a random color for everything below."))
+            for (CosColour *c : rows) c->pick = 1 + rand() % (COL_RANDOM - 1);  // (a named colour: shown as what it is)
+        if (opt_button("Default all", "Puts everything on this page back to the game's normal look.")) {
+            for (CosColour *c : rows) c->pick = COL_DEFAULT;
+            g_settings.enemy_colours = 0;
+            g_settings.screen_filter = 0;
+        }
     }
     opt_section("Colors");
-    opt_colour("Tunic color", &g_settings.tunic, COL_SLOT_TUNIC,
-               "Link's tunic color. Default uses the game's color, or the seed's if it has one.");
+    opt_colour("Tunic color", &g_settings.tunic, COL_SLOT_TUNIC, "Link's tunic color.");
     opt_colour("Heart color", &g_settings.hearts, COL_SLOT_HEARTS, "The color of the hearts on the HUD.");
     opt_colour("Hair color", &g_settings.hair, COL_SLOT_HAIR, "Link's hair color.");
     opt_colour("Body color", &g_settings.skin, COL_SLOT_SKIN, "Link's body color.");  // (larecomp.ini: skin)
@@ -569,6 +577,7 @@ static void tab_cosmetics(void) {
                 col_pick(&g_settings.sand, COL_SLOT_SAND) == preset[i][2])
                 cur = i;
         int v = cur;
+        if (seed) opt_disable_next();
         if (opt_choice("Season", &v, names, 5, 0, "Sets the leaves, grass and sand colors below.") && v != cur) {
             if (v == 4) v = cur == 0 ? 3 : 0;  // (Mixed is never chosen: past the ends, back round)
             g_settings.leaves.pick = preset[v][0];
@@ -584,16 +593,18 @@ static void tab_cosmetics(void) {
     opt_colour("Wall color", &g_settings.walls, COL_SLOT_WALLS, "The overworld's cliff walls and ledges.");
     opt_colour("House color", &g_settings.houses, COL_SLOT_HOUSES, "The roofs of the village houses.");
     opt_section("Enemies");
-    {   // (Off in a seed with its own cosmetics: "Seed", its enemies are per seed)
+    {   // (a seed with its own cosmetics: "Seed", its enemies are per seed; and no screen filter)
         const char *modes[N_ENEMY_COLOUR_MODES];
         for (int i = 0; i < N_ENEMY_COLOUR_MODES; i++) modes[i] = g_enemy_colour_modes[i];
-        if (cosmetics_seed_on()) modes[0] = "Seed";
-        opt_choice("Enemy colors", &g_settings.enemy_colours, modes, N_ENEMY_COLOUR_MODES, 0,
+        int shown = 0;
+        if (seed) modes[0] = "Seed", opt_disable_next();
+        opt_choice("Enemy colors", seed ? &shown : &g_settings.enemy_colours, modes, N_ENEMY_COLOUR_MODES, 0,
                    "Gives each kind of enemy a new color. Enemies whose color shows how strong they are keep theirs.");
+        opt_section("Screen");
+        if (seed) opt_disable_next();
+        opt_choice("Screen filter", seed ? &shown : &g_settings.screen_filter, g_screen_filters, N_SCREEN_FILTERS, 0,
+                   "Puts a filter over the whole screen, HUD included.");
     }
-    opt_section("Screen");
-    opt_choice("Screen filter", &g_settings.screen_filter, g_screen_filters, N_SCREEN_FILTERS, 0,
-               "Puts a filter over the whole screen, HUD included.");
     opt_end();
 }
 
@@ -644,6 +655,66 @@ static void tab_quit(float scale, bool in_game) {
         if (opt_action("Cancel", "", "Stays where you are.")) ask = 0;
     }
     opt_end();
+}
+
+// Reset to vanilla (the round arrow beside the close X): the game as Nintendo made it - 16:9, the Gameplay tab (but
+// its language and LiveSplit address), Cheats and Cosmetics at their defaults; Video / Audio otherwise and the controls
+// stay. A seed being played ends: the game boots again without it (as the Randomizer tab's Switch to vanilla).
+static void reset_to_vanilla(void) {
+    Settings &s = g_settings;
+    s.aspect = ASPECT_ORIGINAL;
+    s.cheat_hookshot = s.no_buff_drops = s.mirror_mode = false;
+    s.walk_speed = 1.0f, s.walk_speed_dungeons = false;
+    s.diff_damage = 1.0f, s.diff_ohko = false;
+    s.timer = false, s.timer_pos = TIMER_POS_LEFT;
+    if (s.livesplit) s.livesplit = false, livesplit_poke();
+    s.cheat_hearts = s.cheat_ammo = s.cheat_rupees = false;
+    for (CosColour *c : {&s.tunic, &s.hearts, &s.hair, &s.skin, &s.shield, &s.leaves, &s.grass, &s.sand, &s.water,
+                         &s.fences, &s.walls, &s.houses})
+        c->pick = COL_DEFAULT;
+    s.enemy_colours = 0, s.screen_filter = 0;
+    LOG("[menu] reset to vanilla%s\n", rando_seed_dir() ? " (leaving the seed)" : "");
+    settings_save();
+    if (rando_seed_dir()) {
+        rando_select("");
+        rt_request_reboot(RT_REBOOT_GAME);
+        set_open(false);
+    }
+}
+
+static void vanilla_popup(float scale) {
+    // LARECOMP_MENU_VANILLA=ask / reset / cancel (test): the question opens with the menu; reset / cancel press that
+    // button a few frames later
+    static const char *test = getenv("LARECOMP_MENU_VANILLA");
+    static int test_frames;
+    if (test && !test_frames++) ImGui::OpenPopup("##vanilla");
+    bool test_reset = test && test_frames == 30 && !strcmp(test, "reset");
+    bool test_cancel = test && test_frames == 30 && !strcmp(test, "cancel");
+    if (!ImGui::BeginPopupModal("##vanilla", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar))
+        return;
+    ImGui::PushFont(g_font_big);
+    ImGui::TextColored(plastic_col(plastic_theme().title), "Reset to vanilla?");
+    ImGui::PopFont();
+    ImGui::Spacing();
+    ImGui::TextUnformatted("This resets your settings to the vanilla game experience.\nYour controls stay as they are.");
+    if (rando_seed_dir()) {
+        ImGui::Spacing();
+        ImGui::TextUnformatted("This also ends the current randomizer seed.\nIts save files are kept.");
+    }
+    ImGui::Spacing();
+    ImGui::Spacing();
+    if (ImGui::Button("Reset", ImVec2(220 * scale, 0)) || test_reset) {
+        ImGui::CloseCurrentPopup();
+        reset_to_vanilla();
+    }
+    ImGui::SameLine();
+    ImGui::SetItemDefaultFocus();
+    if (ImGui::Button("Cancel", ImVec2(220 * scale, 0)) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
+        ImGui::IsKeyPressed(ImGuiKey_Escape, false) || test_cancel) {
+        LOG("[menu] reset to vanilla cancelled\n");
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 extern "C" bool inventory_overlay_wanted(void);
@@ -1138,6 +1209,8 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
         {
             float bx = 44 * scale;
             if (plastic_close_corner(bx, scale)) set_open(false);
+            if (plastic_reset_corner(bx, scale)) ImGui::OpenPopup("##vanilla");
+            vanilla_popup(scale);
         }
 
         bool any_popup = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId), typing = ui_text_busy();  // (before the
