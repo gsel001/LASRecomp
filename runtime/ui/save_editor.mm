@@ -160,13 +160,13 @@ static void sec_player(void) {
     if (opt_text("Name", g_name, 9 * 3, NULL, "The save file's name (up to 8 letters).")) write_name(g_name);
     bool max_changed = false;
     int containers = __builtin_popcount(F<uint16_t>(CONTAINERS) & 0x1FF);
-    if (opt_int("Heart Containers", &containers, 0, 9, 1, 0, "%d / 9",
-                "Heart Containers (one heart each), from the dungeon bosses.")) {
-        F<uint16_t>(CONTAINERS) = (uint16_t)low_bits(containers);
-        max_changed = true;
-    }
     int pieces = __builtin_popcountll(F<uint64_t>(PIECES) & 0xFFFFFFFFull);
-    if (opt_int("Pieces of Heart", &pieces, 0, 32, 1, 0, "%d / 32", "Pieces of Heart: every 4 make a heart.")) {
+    int hearts = 3 + containers + pieces / 4;
+    if (opt_int("Heart Containers", &hearts, 3, 20, 1, 3, "%d / 20",
+                "Link's maximum hearts: Heart Containers first, then Pieces of Heart.")) {
+        containers = hearts - 3 < 9 ? hearts - 3 : 9;
+        pieces = (hearts - 3 - containers) * 4 + (hearts < 20 ? pieces % 4 : 0);  // (keeps a heart's loose pieces)
+        F<uint16_t>(CONTAINERS) = (uint16_t)low_bits(containers);
         F<uint64_t>(PIECES) = low_bits(pieces);
         max_changed = true;
     }
