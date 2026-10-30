@@ -100,3 +100,7 @@ typedef struct {
                                // - a branch starts at the next point)
 } StrikeFrame;
 bool weather_strike(StrikeFrame *s);  // (false: none showing)
+// Lightning that hurts: Link standing where it strikes gets a Buzz Blob's shock (the game's own damage and reaction).
+// Off by default - the Cosmetics tab's weather and a seed's own are looks only; meant for a randomizer weather option
+// (LARECOMP_WEATHER_HARM=1: on, for tests)
+void weather_lightning_harm(bool on);

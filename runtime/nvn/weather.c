@@ -373,8 +373,9 @@ bool weather_snow_cover(SnowFrame *s, const float vp[16]) {
 }
 
 // ---- a storm's lightning strikes (weather.h): every 20-40 s a bolt at a spot near Link - half the time his own,
-// ~1 s ahead (a glow and crackling sparks there): still standing there when it strikes, he gets a Buzz Blob's shock
-// (the game's own: strike_tick, game thread), unless the Lightning setting is off (the weather looks only)
+// ~1 s ahead (a glow and crackling sparks there). Looks only (the Cosmetics tab's weather, a seed's own); with
+// weather_lightning_harm on (for a randomizer weather option to come), Link still standing there when it strikes
+// gets a Buzz Blob's shock (the game's own: strike_tick, game thread)
 static struct {
     float x, y, z;
     double glow, hit;  // (weather time: the glow began, the bolt strikes; glow 0: none)
@@ -386,6 +387,9 @@ static struct {
 static double g_next_strike = -1;
 static int g_shock;    // (the render thread asks the game thread to shock Link: strike_tick)
 static int g_link_ok;  // (the game thread: Link can be struck now - not in a cutscene, swimming, ...: strike_tick)
+static bool g_harm = false;  // (weather_lightning_harm)
+
+void weather_lightning_harm(bool on) { g_harm = on; }
 
 static int bolt_line(float (*pts)[4], int n, int max, const float from[3], const float to[3], int steps, float wild,
                      float w0, float w1) {
@@ -463,8 +467,11 @@ static void storm_strikes(void) {
         float p[3];
         bool hit = link_now(p) && hypotf(p[0] - g_strike.x, p[2] - g_strike.z) < 0.9f &&
                    __atomic_load_n(&g_link_ok, __ATOMIC_ACQUIRE);
-        if (hit && g_settings.weather_lightning) __atomic_store_n(&g_shock, 1, __ATOMIC_RELEASE);
-        if (hit) LOG("[weather] lightning hit Link%s\n", g_settings.weather_lightning ? "" : " (Lightning off: no shock)");
+        static int harm_env = -1;  // LARECOMP_WEATHER_HARM=1 (test): the shock on, as the randomizer's option will
+        if (harm_env < 0) harm_env = getenv("LARECOMP_WEATHER_HARM") != NULL;
+        bool harm = g_harm || harm_env;
+        if (hit && harm) __atomic_store_n(&g_shock, 1, __ATOMIC_RELEASE);
+        if (hit) LOG("[weather] lightning hit Link%s\n", harm ? "" : " (looks only: no shock)");
     }
 }
 

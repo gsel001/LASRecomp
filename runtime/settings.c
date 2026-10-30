@@ -28,7 +28,6 @@ Settings g_settings = {
     .fullscreen = false,
     .volume = 1.0f,
     .reverb = true,
-    .weather_lightning = true,
     .movie_audio = true,
     .rumble = true,
     .rumble_strength = 100,
@@ -236,7 +235,6 @@ void settings_load(void) {
         else if (!strcmp(key, "weather")) {
             for (int i = 0; i < N_WEATHERS; i++) if (!strcmp(val, k_weather_keys[i])) g_settings.weather = i;
         }
-        else if (!strcmp(key, "weather_lightning")) g_settings.weather_lightning = atoi(val) != 0;
         else if (!strcmp(key, "enemy_colours")) {
             for (int i = 0; i < N_ENEMY_COLOUR_MODES; i++) if (!strcmp(val, k_enemy_colour_keys[i])) g_settings.enemy_colours = i;
         }
@@ -310,7 +308,7 @@ void settings_save(void) {
     }
     fprintf(f, "enemy_colours = %s\n", k_enemy_colour_keys[g_settings.enemy_colours]);
     fprintf(f, "screen_filter = %s\n", k_screen_filter_keys[g_settings.screen_filter]);
-    fprintf(f, "weather = %s\nweather_lightning = %d\n", k_weather_keys[g_settings.weather], g_settings.weather_lightning);
+    fprintf(f, "weather = %s\n", k_weather_keys[g_settings.weather]);
     bind_settings_save(f);
     fprintf(f, "rando_seed = %s\n", g_settings.rando_seed);
     if (g_settings.rando_options[0]) fprintf(f, "rando_options = %s\n", g_settings.rando_options);
