@@ -195,7 +195,8 @@ without touching the installed game, your game files or your saves.
 - **[@gitarre1234rr5](https://github.com/gitarre1234rr5)** - controller rumble (#104) and a regression test (#88)
 - **[@rkammoun](https://github.com/rkammoun)** - the fix for the black walls in the Ukuku Prairie cave on Mac (#215, #216)
 - **[@NevesHenry](https://github.com/NevesHenry)** - a clear message on Linux when no file window can open (#298),
-  the rumble test running in CI (#299), and Linux builds finding their own SDL3 (#437)
+  the rumble test running in CI (#299), Linux builds finding their own SDL3 (#437), font re-imports that no longer
+  empty the font (#490), and a message box on Linux for a CPU without AVX2 (#491)
 - **[@ky1vstar](https://github.com/ky1vstar)** - a much faster Linux ARM release build (#319)
 - **[@theb0rg](https://github.com/theb0rg)** - the fix for AMD integrated graphics on Windows (#335)
 - **[@gtf-dot](https://github.com/gtf-dot)** - the game-text font on Linux (#330)
