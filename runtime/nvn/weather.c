@@ -119,7 +119,7 @@ static bool unproject_floor(const float *inv, float x, float y, float py, float 
 
 // ---- the storm: lightning flashes and thunder
 static double g_next_flash = 4, g_flash_at = -100, g_thunder_at = -1;
-static float g_thunder_gain;
+static float g_thunder_gain, g_flash_k = 1;  // (k: the flash's strength - a strike here, 1.6)
 static uint32_t g_rng = 0x1234567;
 static float frand(void) { g_rng = mix32(g_rng + 0x9E3779B9u); return (g_rng >> 8) / 16777216.0f; }
 
@@ -128,7 +128,7 @@ static float storm_flash(double t, uint64_t frame) {
     if (force_at == -2) force_at = getenv("LARECOMP_WEATHER_FLASH_AT") ? atol(getenv("LARECOMP_WEATHER_FLASH_AT")) : -1;
     if (force_at >= 0 && (long)frame >= force_at) force_at = -1, g_next_flash = t;
     if (t >= g_next_flash) {
-        g_flash_at = t;
+        g_flash_at = t, g_flash_k = 1;
         g_next_flash = t + 7 + frand() * 14;  // (every 7-21 s)
         float dist = frand();                  // near (0) .. far (1): the thunder's delay and volume
         g_thunder_at = t + 0.3 + dist * 2.2;
@@ -143,7 +143,7 @@ static float storm_flash(double t, uint64_t frame) {
     double a = t - g_flash_at;
     if (a < 0 || a > 0.7) return 0;
     float f = a < 0.06 ? 1.0f : a < 0.12 ? 0.2f : a < 0.18 ? 0.75f : (float)exp(-(a - 0.18) * 12);
-    return f;
+    return f * g_flash_k;
 }
 
 // The probe points (uv in the depth texture: its row 0 at the top) and the world point a probe's depth gives
@@ -180,12 +180,12 @@ static double host_now(void) {
 }
 
 static bool level_is_field(void);
-void weather_player_tick(uint64_t frame) {
+void weather_player_tick(Cpu *c, uint64_t frame) {
     static int tm = -1;  // LARECOMP_SNOW_TIME=1 (test): this tick's CPU time (game thread), mean every 120 frames
     if (tm < 0) tm = getenv("LARECOMP_SNOW_TIME") != NULL;
     uint64_t t0 = tm ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0;
-    void weather_player_tick_(uint64_t frame);
-    weather_player_tick_(frame);
+    void weather_player_tick_(Cpu *c, uint64_t frame);
+    weather_player_tick_(c, frame);
     if (tm) {
         static uint64_t sum;
         static int n;
@@ -193,8 +193,11 @@ void weather_player_tick(uint64_t frame) {
         if (++n == 120) LOG("[snow] game thread CPU %.2f us a frame\n", sum / 120 / 1e3), sum = 0, n = 0;
     }
 }
-void weather_player_tick_(uint64_t frame) {
-    if (!g_outdoors || !snowy(weather_current()) || !level_is_field()) return;
+static void strike_tick(Cpu *c);
+void weather_player_tick_(Cpu *c, uint64_t frame) {
+    int kind = weather_current();
+    if (!g_outdoors || !(snowy(kind) || kind == WEATHER_STORM) || !level_is_field()) return;
+    if (kind == WEATHER_STORM) strike_tick(c);
     extern uint64_t doorjump_player(uint64_t frame);  // runtime/hle/doorjump.c (the PlayerCollision component)
     uint64_t pc = doorjump_player(frame);
     if (!pc) return;
@@ -369,6 +372,181 @@ bool weather_snow_cover(SnowFrame *s, const float vp[16]) {
     return true;
 }
 
+// ---- a storm's lightning strikes (weather.h): every 20-40 s a bolt at a spot near Link - half the time his own,
+// ~1 s ahead (a glow and crackling sparks there): still standing there when it strikes, he gets a Buzz Blob's shock
+// (the game's own: strike_tick, game thread), unless the Lightning setting is off (the weather looks only)
+static struct {
+    float x, y, z;
+    double glow, hit;  // (weather time: the glow began, the bolt strikes; glow 0: none)
+    bool struck;
+    uint32_t seed;
+    int n;
+    float pts[STRIKE_PTS][4];
+} g_strike;
+static double g_next_strike = -1;
+static int g_shock;    // (the render thread asks the game thread to shock Link: strike_tick)
+static int g_link_ok;  // (the game thread: Link can be struck now - not in a cutscene, swimming, ...: strike_tick)
+
+static int bolt_line(float (*pts)[4], int n, int max, const float from[3], const float to[3], int steps, float wild,
+                     float w0, float w1) {
+    float off[2] = {0, 0};
+    for (int k = 0; k <= steps && n < max; k++) {
+        float f = (float)k / steps;
+        // (a random walk across the line, pulled back to it toward the end: every bolt its own jags)
+        off[0] = off[0] * 0.75f + (frand() - 0.5f) * wild, off[1] = off[1] * 0.75f + (frand() - 0.5f) * wild * 0.6f;
+        float pull = k == steps ? 0 : 1 - f * f;
+        pts[n][0] = from[0] + (to[0] - from[0]) * f + off[0] * pull;
+        pts[n][1] = from[1] + (to[1] - from[1]) * f;
+        pts[n][2] = from[2] + (to[2] - from[2]) * f + off[1] * pull;
+        pts[n][3] = w0 + (w1 - w0) * f;
+        n++;
+    }
+    return n;
+}
+
+static void strike_build(void) {
+    // the main channel from high up (leaning away from the camera: up the screen) down to the target, then two
+    // branches off it that end in the air; a 0-width point between them (a break)
+    float top[3] = {(frand() - 0.5f) * 4, 14, -3 - frand() * 3}, end[3] = {0, 0, 0};
+    int n = bolt_line(g_strike.pts, 0, STRIKE_PTS, top, end, 21, 1.4f, 5.5f, 4.5f);
+    for (int b = 0; b < 2 && n < STRIKE_PTS - 2; b++) {
+        g_strike.pts[n][3] = 0, n++;
+        const float *at = g_strike.pts[4 + b * 6 + (int)(frand() * 3)];
+        float side = frand() < 0.5f ? -1 : 1, len = 2 + frand() * 2.5f;
+        float to[3] = {at[0] + side * len, at[1] - len * (0.8f + frand() * 0.6f), at[2] + (frand() - 0.5f) * len};
+        n = bolt_line(g_strike.pts, n, STRIKE_PTS, at, to, 7, 0.9f, 2.5f, 0.6f);
+    }
+    g_strike.n = n;
+}
+
+static bool link_now(float p[3]) {  // (Link's feet as the game thread read them last, if recent)
+    pthread_mutex_lock(&g_link_lock);
+    memcpy(p, g_link, sizeof g_link);
+    double at = g_link_at;
+    pthread_mutex_unlock(&g_link_lock);
+    return g_link_n && host_now() - at < 0.5;
+}
+
+// The render thread, every frame of a storm on screen (weather time t)
+static void storm_strikes(void) {
+    static double test = -2, every;  // LARECOMP_WEATHER_STRIKE=<s>[,<every s>][,link] (test): the first then, the next
+    static bool test_link;           // every so often (default as normal), ",link": every one at Link
+    if (test == -2) {
+        const char *e = getenv("LARECOMP_WEATHER_STRIKE");
+        test = -1, every = 0;
+        if (e) test = atof(e), every = strchr(e, ',') ? atof(strchr(e, ',') + 1) : 0, test_link = strstr(e, "link") != NULL;
+        if (test >= 0) g_next_strike = test;
+    }
+    if (g_next_strike < 0) g_next_strike = t + 12 + frand() * 10;
+    if (g_strike.glow > 0 && t > g_strike.hit + 14) g_strike.glow = 0;  // (the scorch has faded)
+    if (t >= g_next_strike && (g_strike.glow <= 0 || t > g_strike.hit + 1.5)) {
+        float p[3];
+        if (!link_now(p) || !__atomic_load_n(&g_link_ok, __ATOMIC_ACQUIRE)) g_next_strike = t + 2;  // (later)
+        else {
+            bool at_link = test_link || frand() < 0.5f;
+            float a = frand() * 6.2832f, r = at_link ? frand() * 0.3f : 2.5f + frand() * 4.5f;
+            g_strike.x = p[0] + cosf(a) * r, g_strike.y = p[1], g_strike.z = p[2] + sinf(a) * r * 0.8f;
+            g_strike.glow = t, g_strike.hit = t + 1.0, g_strike.struck = false;
+            g_strike.seed = (uint32_t)(frand() * 16777216.0f);
+            strike_build();
+            g_next_strike = t + (every > 0 ? every : 20 + frand() * 20);
+            LOG("[weather] lightning at %.2f %.2f %.2f (%s Link)\n", g_strike.x, g_strike.y, g_strike.z, at_link ? "at" : "near");
+        }
+    }
+    if (g_strike.glow > 0 && !g_strike.struck && t >= g_strike.hit) {
+        g_strike.struck = true;
+        g_flash_at = t, g_flash_k = 1.6f;  // (a bright flash, the thunder right away and loud: it is here)
+        g_thunder_at = -1;
+        g_next_flash = fmax(g_next_flash, t + 4);
+        menu_sfx_play_gain(MENU_SFX_THUNDER, 1.0f);
+        input_rumble_pulse(30000, 12000, 450);
+        float p[3];
+        bool hit = link_now(p) && hypotf(p[0] - g_strike.x, p[2] - g_strike.z) < 0.9f &&
+                   __atomic_load_n(&g_link_ok, __ATOMIC_ACQUIRE);
+        if (hit && g_settings.weather_lightning) __atomic_store_n(&g_shock, 1, __ATOMIC_RELEASE);
+        if (hit) LOG("[weather] lightning hit Link%s\n", g_settings.weather_lightning ? "" : " (Lightning off: no shock)");
+    }
+}
+
+bool weather_strike(StrikeFrame *s) {
+    if (g_strike.glow <= 0 || weather_current() != WEATHER_STORM) return false;
+    s->at[0] = g_strike.x, s->at[1] = g_strike.y, s->at[2] = g_strike.z, s->at[3] = (float)t;
+    s->tm[0] = (float)g_strike.glow, s->tm[1] = (float)g_strike.hit, s->tm[2] = (float)g_strike.seed, s->tm[3] = (float)g_strike.n;
+    memcpy(s->pts, g_strike.pts, sizeof s->pts);
+    return true;
+}
+
+// The game thread (weather_player_tick, a storm on the overworld): whether Link can be struck now, and the shock
+// Link (GA(GAME_MGR) +0x4b8: his actor) and whether the game would let a hit land now: its own check (the filter his
+// damage component runs on every hit: his state, his blink after a hit at +0x1e80, +0x1b8c bit 0 no hits), then
+// the Buzz Blob's own hit (its attack data: 1 heart, reaction 1 - the electric shock, "dmg_elec") through his damage
+// callback, as the collision system calls it: the damage (the Gameplay tab's multiplier too), the sound, the blink;
+// his next update plays the shock. No attacker: no knockback. The game thread only (weather_player_tick)
+static uint64_t g_shock_mem;  // (guest: the callbacks' lambda {0, Link}, an empty attacker, the hit info)
+static uint64_t link_actor(void) {
+    extern int game_in_play(void);
+    uint64_t gm = game_in_play() ? LD64(GA(GAME_MGR)) : 0, link = gm ? LD64(gm + 0x4b8) : 0;
+    return link && LD64(link + 8) == link ? link : 0;  // (its own weak pointer: a live actor)
+}
+
+static uint32_t link_hit(Cpu *c, uint64_t link, bool damage) {
+    if (!g_shock_mem) g_shock_mem = (uint64_t)(uintptr_t)hle_alloc(0x500);
+    uint64_t lam = g_shock_mem, pair = lam + 0x10, hit = lam + 0x30, cmp = lam + 0x100;
+    memset((void *)(uintptr_t)lam, 0, 0x500);
+    ST64(lam + 8, link);
+    ST64(hit + 0x10, link), ST64(hit + 0x18, LD64(link + 0x10));
+    ST64(hit + 0x20, GA(BUZZBLOB_ATTACK)), ST64(hit + 0x28, GA(LINK_DEFENCE));
+    uint64_t saved[31], sp = c->sp, pc = c->pc;
+    memcpy(saved, c->x, sizeof saved);
+    c->x[0] = lam, c->x[1] = damage ? pair : cmp, c->x[2] = hit;
+    guest_call(c, damage ? GA(LINK_DAMAGE_CB) : GA(LINK_HIT_FILTER));
+    uint32_t r = (uint32_t)c->x[0];
+    memcpy(c->x, saved, sizeof saved);
+    c->sp = sp, c->pc = pc;
+    return r;
+}
+
+// His state (+0x4ed: an index into the state objects at +0x1340): only these let lightning aim at him or hit him -
+// 0 standing / walking, 1 jumping, 2 a sword swing, 10 the shield up, 26 the hookshot (seen in test runs); any other
+// (swimming, falling, carrying, talking, an item get, a cutscene, a level's start) is left alone.
+// LARECOMP_LOG_LINK_STATE=1 (test): each new state, its vtable and what the game's hit check says then
+static uint32_t link_hit(Cpu *c, uint64_t link, bool damage);
+static bool link_free(Cpu *c, uint64_t link) {
+    uint8_t id = LD8(link + 0x4ed);
+    static int lg = -1, last = -1;
+    if (lg < 0) lg = getenv("LARECOMP_LOG_LINK_STATE") != NULL;
+    if (lg && id != last) {
+        last = id;
+        uint64_t so = id < 0x40 ? LD64(link + 0x1340 + 8 * (uint64_t)id) : 0, vt = so ? LD64(so) : 0, ti = vt ? LD64(vt - 8) : 0;
+        const char *name = ti ? (const char *)(uintptr_t)LD64(ti + 8) : NULL;
+        LOG("[weather] link state %u (%s) vt main+%llx iframes %g nohit %u filter %#x\n", id, name ? name : "?",
+            (unsigned long long)(vt ? vt - 0x7000000000ull : 0), *(const float *)(uintptr_t)(link + 0x1e80),
+            LD8(link + 0x1b8c) & 1, link_hit(c, link, false));
+    }
+    return id < 32 && ((1u << id) & (1u << 0 | 1u << 1 | 1u << 2 | 1u << 10 | 1u << 26));
+}
+
+static bool link_shockable(Cpu *c) {
+    uint64_t link = link_actor();
+    if (!link || !link_free(c, link) || *(const float *)(uintptr_t)(link + 0x1e80) > 0 || (LD8(link + 0x1b8c) & 1)) return false;
+    return true;
+}
+
+static void link_shock(Cpu *c) {
+    uint64_t link = link_actor();
+    if (!link) return;
+    uint32_t f = link_hit(c, link, false);  // (the game's own check: 3 - no hit now)
+    LOG("[weather] lightning shocks Link (filter %#x)\n", f);
+    if ((f & 0xff) == 3) return;
+    link_hit(c, link, true);
+}
+
+static void strike_tick(Cpu *c) {
+    bool ok = link_shockable(c);
+    __atomic_store_n(&g_link_ok, ok, __ATOMIC_RELEASE);
+    if (__atomic_exchange_n(&g_shock, 0, __ATOMIC_ACQ_REL) && ok) link_shock(c);
+}
+
 // The wind: rain and storm blow steadily along x, snow drifts gently; a blizzard has a light wind of its own and
 // gusts - every 5-12 s it blows hard (7-11 world units / s) from a new direction for 2-5 s, ramped up and back down
 // smoothly. wind[0..1]: the drift so far (wrapped at the volume's size: the particles' positions wrap with it),
@@ -518,6 +696,7 @@ bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PR
             f->leaf[3] = 40;  // (in the volume, 34 x 34: ~15 on screen)
         }
         if (storm) {
+            storm_strikes();
             float fl = storm_flash(t, frame);
             f->fill[0] = fl * 0.22f, f->fill[1] = fl * 0.25f, f->fill[2] = fl * 0.30f;
             f->fill[3] += (1 - f->fill[3]) * fl;  // (the flash lifts the overcast too)

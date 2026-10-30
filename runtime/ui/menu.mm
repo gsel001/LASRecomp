@@ -548,6 +548,7 @@ static void tab_cosmetics(void) {
         g_settings.enemy_colours = 0;
         g_settings.screen_filter = 0;
         g_settings.weather = 0;
+        g_settings.weather_lightning = true;
     }
     opt_section("Colors");
     opt_colour("Tunic color", &g_settings.tunic, COL_SLOT_TUNIC,
@@ -601,6 +602,9 @@ static void tab_cosmetics(void) {
         for (int i = 0; i < N_WEATHERS; i++) names[i] = g_weathers[i];
         if (cosmetics_seed_on()) names[0] = "Seed";
         opt_choice("Weather", &g_settings.weather, names, N_WEATHERS, 0, "Rain, snow, a storm or a blizzard on the overworld.");
+        opt_toggle("Lightning strikes Link", &g_settings.weather_lightning, true,
+                   "In a storm, lightning hits the ground now and then. Standing there shocks Link like a Buzz Blob. "
+                   "Off: the weather is only for looks.");
     }
 #endif
     opt_end();

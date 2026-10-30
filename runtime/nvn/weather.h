@@ -84,5 +84,19 @@ float weather_snow_now(void);  // (their time base: the weather's time)
 // A tree drawn this frame (the renderer: a scenery actor with canopy maps; its model's world position): which shaken
 // tree slot it is (1..7, its snow regrowing after a bonk), 0: none
 int weather_snow_tree(const float pos[3]);
-// Game thread, every frame: Link's position for the footprints and the kicked-up snow (snow on the overworld only)
-void weather_player_tick(uint64_t frame);
+// Game thread, every frame: Link's position for the footprints and the kicked-up snow (snow on the overworld only),
+// and for a storm's lightning (it aims at him now and then; it shocks him if he is still there when it strikes)
+struct Cpu;
+void weather_player_tick(struct Cpu *c, uint64_t frame);
+
+// ---- a storm's lightning strike: ~1 s of a glow and sparks crackling on the ground at the target, then the bolt
+// from the sky with a flash and a thunderclap, sparks, and a scorch mark that fades. The target's height is the
+// scene's under it (the renderer's wx_surface); the bolt's points are relative to it.
+enum { STRIKE_PTS = 40 };
+typedef struct {
+    float at[4];     // the target (world xyz; y: Link's feet, the shader takes the ground's), w: the time now (s)
+    float tm[4];     // x: when the glow began, y: when the bolt strikes, z: a seed for the sparks, w: the points used
+    float pts[STRIKE_PTS][4];  // the bolt: xyz from the target (y up), w: its width there (pixels at 1080p; 0: a break
+                               // - a branch starts at the next point)
+} StrikeFrame;
+bool weather_strike(StrikeFrame *s);  // (false: none showing)

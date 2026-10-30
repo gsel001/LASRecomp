@@ -4589,6 +4589,125 @@ static const char *wx_src =
     "  float rim = mix(0.8, 1.0, smoothstep(0.0, 0.18, edge));\n"  // (a darker rim)
     "  return float4(col * side * rib * veins * rim, a * in.a);\n"
     "}\n"
+    // a storm's lightning strike (weather_strike): the ground under the target (the scene's, else the target's own
+    // height), a glow and crackling sparks there until the bolt, then the bolt, a burst of sparks and a scorch mark.
+    // Premultiplied: rgb added, the picture times 1 - a
+    "struct SK { float4 at; float4 tm; float4 pts[40]; };\n"
+    "struct KO { float4 pos [[position]]; float2 uv; float a; float3 g; };\n"
+    "static float3 sk_ground(constant WF &w, depth2d<float> dt, constant SK &k) {\n"
+    "  float3 s;\n"
+    "  if (wx_surface(w, dt, k.at.xyz, s) && abs(s.y - k.at.y) < 3.0) return float3(k.at.x, s.y, k.at.z);\n"
+    "  return k.at.xyz;\n"
+    "}\n"
+    // the mark on the ground: a square around the target, each pixel the scene's own point there (by its depth)
+    "vertex KO wx_mark_vs(uint vid [[vertex_id]], constant WF &w [[buffer(0)]], depth2d<float> dt [[texture(0)]],\n"
+    "                     constant SK &k [[buffer(3)]]) {\n"
+    "  KO o;\n"
+    "  o.g = sk_ground(w, dt, k);\n"
+    "  float2 corner = float2((vid & 1u) ? 1.0 : -1.0, (vid & 2u) ? 1.0 : -1.0);\n"
+    "  o.pos = clip_of(w, o.g + float3(corner.x, 0.0, corner.y) * 2.2);\n"
+    "  o.uv = corner; o.a = 1.0;\n"
+    "  return o;\n"
+    "}\n"
+    "fragment float4 wx_mark_fs(KO in [[stage_in]], constant WF &w [[buffer(0)]], depth2d<float> dt [[texture(0)]],\n"
+    "                           constant SK &k [[buffer(3)]]) {\n"
+    "  float2 p = in.pos.xy;\n"
+    "  if (w.flags.z > 0.5) p.x = w.screen.x - p.x;\n"
+    "  uint2 q = uint2(clamp(p * w.screen.zw / w.screen.xy, float2(0.0), w.screen.zw - 1.0));\n"
+    "  float d = dt.read(q);\n"
+    "  if (d >= 0.99999) discard_fragment();\n"
+    "  float3 s = world_at(w, p / w.screen.xy, d);\n"
+    "  float dy = s.y - in.g.y;\n"
+    "  if (dy > 0.4 || dy < -1.2) discard_fragment();\n"  // (Link standing on it, a bush, a cliff below: not the ground)
+    "  float2 v = s.xz - in.g.xz;\n"
+    "  float r = length(v), an = atan2(v.y, v.x), now = k.at.w;\n"
+    "  float3 rgb = float3(0.0); float a = 0.0, keep = 1.0 - smoothstep(0.15, 0.4, dy) * 1.0;\n"
+    "  if (now < k.tm.y) {\n"  // the warning: a flickering glow, growing, with sparks of light running out from it
+    "    float ph = saturate((now - k.tm.x) / max(k.tm.y - k.tm.x, 1e-3));\n"
+    "    float fl = 0.6 + 0.4 * h1(uint(now * 40.0) + 7u);\n"
+    "    float g = (1.0 - smoothstep(0.0, 0.25 + 0.65 * ph, r)) * (0.25 + 0.75 * ph) * fl;\n"
+    "    float arc = pow(saturate(sin(an * 5.0 + h1(uint(now * 12.0)) * 40.0)), 24.0) * (1.0 - smoothstep(0.2, 0.6 + ph, r));\n"
+    "    rgb = float3(0.55, 0.75, 1.0) * (g * 1.5 + arc * 1.0 * fl);\n"
+    "  } else {\n"  // the strike: a white-blue blaze, embers, then a scorch mark fading over ~12 s
+    "    float age = now - k.tm.y;\n"
+    "    float ab = (an + 3.1416) * 2.0, af = fract(ab);\n"  // (a ragged edge: 13 bumps round it, blended)
+    "    uint ai = uint(ab) % 13u, aj = (ai + 1u) % 13u;\n"
+    "    float jag = 0.8 + 0.4 * mix(h1(ai + uint(k.tm.z)), h1(aj + uint(k.tm.z)), smoothstep(0.0, 1.0, af));\n"
+    "    float rr = r / (1.45 * jag);\n"
+    "    a = (1.0 - smoothstep(0.35, 1.0, rr)) * 0.85 * (1.0 - smoothstep(5.0, 12.0, age));\n"
+    "    rgb = float3(0.03, 0.025, 0.02) * a;\n"
+    "    rgb += float3(1.0, 0.5, 0.15) * (1.0 - smoothstep(0.0, 0.45, rr)) * exp(-age * 2.0) * (0.7 + 0.3 * h1(uint(now * 20.0)));\n"
+    "    rgb += float3(0.75, 0.85, 1.0) * (1.0 - smoothstep(0.0, 1.6, r)) * exp(-age * 9.0);\n"
+    "  }\n"
+    "  return float4(rgb, a) * keep;\n"
+    "}\n"
+    // sparks: the first 16 crackle on the ground around the target until the bolt (each pops up and is gone, again
+    // somewhere else), the rest fly out from it when it strikes and fall
+    "vertex VO wx_spark_vs(uint vid [[vertex_id]], uint iid [[instance_id]], constant WF &w [[buffer(0)]],\n"
+    "                      depth2d<float> dt [[texture(0)]], constant SK &k [[buffer(3)]]) {\n"
+    "  VO o;\n"
+    "  o.uv = float2(0.0); o.a = 0.0; o.pos = float4(0.0, 0.0, -2.0, 1.0);\n"
+    "  float3 g = sk_ground(w, dt, k), p;\n"
+    "  float now = k.at.w, size;\n"
+    "  uint sd = uint(k.tm.z) + iid * 977u;\n"
+    "  if (iid < 16u) {\n"
+    "    if (now >= k.tm.y) return o;\n"
+    "    float c = (now - k.tm.x) * 9.0 + h1(sd);\n"
+    "    uint n = uint(c);\n"
+    "    float f = fract(c), an = h1(sd + n * 31u) * 6.2832, r = 0.15 + 0.8 * h1(sd + n * 17u);\n"
+    "    p = g + float3(cos(an) * r, 0.05 + 0.3 * f * h1(sd + n * 5u), sin(an) * r);\n"
+    "    o.a = (1.0 - f) * saturate((now - k.tm.x) * 3.0);\n"
+    "    size = 3.0;\n"
+    "  } else {\n"
+    "    float age = now - k.tm.y, life = 0.4 + 0.5 * h1(sd + 1u);\n"
+    "    if (age < 0.0 || age > life) return o;\n"
+    "    float an = h1(sd + 2u) * 6.2832, sp = 2.0 + 4.0 * h1(sd + 3u);\n"
+    "    float3 v = float3(cos(an) * sp, 2.0 + 4.0 * h1(sd + 4u), sin(an) * sp);\n"
+    "    p = g + v * age + float3(0.0, -7.0, 0.0) * age * age;\n"
+    "    p.y = max(p.y, g.y + 0.03);\n"
+    "    o.a = 1.0 - age / life;\n"
+    "    size = 4.0;\n"
+    "  }\n"
+    "  p += normalize(w.cam.xyz - p) * 0.3;\n"  // (above the ground's depth)
+    "  float2 corner = float2((vid & 1u) ? 1.0 : -1.0, (vid & 2u) ? 1.0 : -1.0);\n"
+    "  float4 c = clip_of(w, p);\n"
+    "  c.xy += corner * size * w.screen.y / 1080.0 / w.screen.xy * c.w;\n"
+    "  o.pos = c; o.uv = corner;\n"
+    "  return o;\n"
+    "}\n"
+    "fragment float4 wx_spark_fs(VO in [[stage_in]]) {\n"
+    "  float r = length(in.uv), e = (1.0 - smoothstep(0.2, 1.0, r)) * in.a;\n"
+    "  return float4(mix(float3(1.0, 0.6, 0.25), float3(1.0, 0.95, 0.85), saturate(1.0 - r * 1.5)) * e, 0.0);\n"
+    "}\n"
+    // the bolt: segment i from point i to i + 1 (none across a break), a ribbon facing the screen: a white core in a
+    // blue glow; it flickers (struck twice) and fades in ~0.4 s
+    "vertex VO wx_bolt_vs(uint vid [[vertex_id]], uint iid [[instance_id]], constant WF &w [[buffer(0)]],\n"
+    "                     depth2d<float> dt [[texture(0)]], constant SK &k [[buffer(3)]]) {\n"
+    "  VO o;\n"
+    "  o.uv = float2(0.0); o.a = 0.0; o.pos = float4(0.0, 0.0, -2.0, 1.0);\n"
+    "  float age = k.at.w - k.tm.y;\n"
+    "  if (age < 0.0 || age > 0.6 || float(iid + 1u) >= k.tm.w) return o;\n"
+    "  float4 p0 = k.pts[iid], p1 = k.pts[iid + 1u];\n"
+    "  if (p0.w <= 0.0 || p1.w <= 0.0) return o;\n"
+    "  float3 g = sk_ground(w, dt, k);\n"
+    "  float4 c0 = clip_of(w, g + p0.xyz), c1 = clip_of(w, g + p1.xyz);\n"
+    "  if (c0.w <= 0.0 || c1.w <= 0.0) return o;\n"
+    "  float2 s0 = c0.xy / c0.w * w.screen.xy, s1 = c1.xy / c1.w * w.screen.xy;\n"
+    "  float2 dir = normalize(s1 - s0 + float2(1e-4, 0.0)), nrm = float2(-dir.y, dir.x);\n"
+    "  bool end = (vid & 1u) != 0u;\n"
+    "  float4 c = end ? c1 : c0;\n"
+    "  float wd = (end ? p1.w : p0.w) * 6.0 * w.screen.y / 1080.0;\n"  // (core and glow: 3x the core's width)
+    "  float side = (vid & 2u) ? 1.0 : -1.0;\n"
+    "  c.xy += (nrm * side * wd + dir * (end ? wd : -wd) * 0.5) / w.screen.xy * c.w;\n"  // (a little past the ends: joins)
+    "  o.pos = c; o.uv = float2(side, 0.0);\n"
+    "  o.a = age < 0.07 ? 1.0 : age < 0.12 ? 0.25 : age < 0.2 ? 1.0 : exp(-(age - 0.2) * 9.0);\n"
+    "  return o;\n"
+    "}\n"
+    "fragment float4 wx_bolt_fs(VO in [[stage_in]]) {\n"
+    "  float x = abs(in.uv.x);\n"
+    "  float core = 1.0 - smoothstep(0.18, 0.33, x), glow = exp(-x * x * 9.0);\n"
+    "  return float4((float3(1.0) * core + float3(0.45, 0.6, 1.0) * glow * 0.8) * in.a, 0.0);\n"
+    "}\n"
     // the fill: out = rgb + picture * a (overcast, lightning)
     "vertex float4 wx_fill_vs(uint vid [[vertex_id]]) {\n"
     "  return float4(vid == 1u ? 3.0 : -1.0, vid == 2u ? 3.0 : -1.0, 0.0, 1.0);\n"
@@ -4635,7 +4754,7 @@ static void weather_encode(void) {
 
     // pipelines: by the window image's format
     static id<MTLLibrary> lib;
-    static id<MTLRenderPipelineState> pipe[5];  // particles, splashes, fill, kicked-up snow, leaves
+    static id<MTLRenderPipelineState> pipe[8];  // particles, splashes, fill, kicked-up snow, leaves; lightning: mark, sparks, bolt
     static MTLPixelFormat pipe_fmt;
     id<MTLTexture> ct = view_texture(win, &st.rt.cview[0], st.rt.has_cview[0], true, nil);
     if (!ct) return;
@@ -4646,9 +4765,10 @@ static void weather_encode(void) {
     }
     if (pipe_fmt != ct.pixelFormat) {
         pipe_fmt = ct.pixelFormat;
-        static const char *const fn[5][2] = {{"wx_vs", "wx_fs"}, {"wx_splash_vs", "wx_splash_fs"}, {"wx_fill_vs", "wx_fill_fs"},
-                                             {"wx_puff_vs", "wx_puff_fs"}, {"wx_leaf_vs", "wx_leaf_fs"}};
-        for (int i = 0; i < 5; i++) {
+        static const char *const fn[8][2] = {{"wx_vs", "wx_fs"}, {"wx_splash_vs", "wx_splash_fs"}, {"wx_fill_vs", "wx_fill_fs"},
+                                             {"wx_puff_vs", "wx_puff_fs"}, {"wx_leaf_vs", "wx_leaf_fs"},
+                                             {"wx_mark_vs", "wx_mark_fs"}, {"wx_spark_vs", "wx_spark_fs"}, {"wx_bolt_vs", "wx_bolt_fs"}};
+        for (int i = 0; i < 8; i++) {
             MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
             pd.vertexFunction = [lib newFunctionWithName:@(fn[i][0])];
             pd.fragmentFunction = [lib newFunctionWithName:@(fn[i][1])];
@@ -4657,7 +4777,7 @@ static void weather_encode(void) {
             ca.blendingEnabled = YES;
             ca.alphaBlendOperation = ca.rgbBlendOperation = MTLBlendOperationAdd;
             ca.sourceAlphaBlendFactor = MTLBlendFactorZero, ca.destinationAlphaBlendFactor = MTLBlendFactorOne;  // (alpha kept)
-            ca.sourceRGBBlendFactor = i == 2 ? MTLBlendFactorOne : MTLBlendFactorSourceAlpha;
+            ca.sourceRGBBlendFactor = i == 2 || i >= 5 ? MTLBlendFactorOne : MTLBlendFactorSourceAlpha;  // (5-7: premultiplied)
             ca.destinationRGBBlendFactor = i == 2 ? MTLBlendFactorSourceAlpha : MTLBlendFactorOneMinusSourceAlpha;
             NSError *err = nil;
             pipe[i] = TIMED_COMPILE([dev newRenderPipelineStateWithDescriptor:pd error:&err]);
@@ -4698,6 +4818,17 @@ static void weather_encode(void) {
     if (wf.leaf[3] > 0 && !dbg) {  // (a storm's leaves)
         [e setRenderPipelineState:pipe[4]];
         [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4 instanceCount:(NSUInteger)wf.leaf[3]];
+    }
+    StrikeFrame sk;
+    if (wf.kind == WEATHER_STORM && !dbg && weather_strike(&sk)) {  // (a lightning strike: its mark, sparks, the bolt)
+        [e setVertexBytes:&sk length:sizeof sk atIndex:3];
+        [e setFragmentBytes:&sk length:sizeof sk atIndex:3];
+        [e setRenderPipelineState:pipe[5]];
+        [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+        [e setRenderPipelineState:pipe[6]];
+        [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4 instanceCount:48];
+        [e setRenderPipelineState:pipe[7]];
+        [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4 instanceCount:STRIKE_PTS - 1];
     }
     if ((wf.kind == WEATHER_SNOW || wf.kind == WEATHER_BLIZZARD) && !dbg) {  // (the snow Link kicked up)
         // (past setVertexBytes' 4 KB: a small shared buffer per frame in flight, 4 of them in turn)
