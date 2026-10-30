@@ -3109,7 +3109,7 @@ static bool wx_dm1;  // (its depth mode: -1..1)
 static const char *sc_src =
     "#include <metal_stdlib>\n"
     "using namespace metal;\n"
-    "struct SF { float4 vp[4]; float4 ivp[4]; float4 screen, flags, zr, trail, tone; };\n"
+    "struct SF { float4 vp[4]; float4 ivp[4]; float4 screen, flags, zr, trail, tone; float shake[8]; };\n"
     "struct SP { float4 a; float4 b; };\n"  // (SnowPrint: x y z t, ang side len wid)
     "static float3 world_at(constant SF &w, float2 uv, float d) {\n"  // the world point of the scene depth d at uv
     "  float2 m = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);\n"
@@ -3361,6 +3361,8 @@ static const char *sc_src =
     "  }\n"
     "  float4 hv = wsum > 1e-4 ? acc / wsum : near;\n"
     "  float k = hv.x * smoothstep(0.018, 0.03, mc);\n"
+    "  uint ts = (sm.r >> 1) & 7u;\n"  // (a tree shaken bare by a bonk: its snow growing back)
+    "  if (ts != 0u) k *= w.shake[ts];\n"
     "  if (k <= 0.0) return dst;\n"
     "  float cover = w.flags.z, rough = hv.z;\n"
     "  float3 p = world_at(w, (float2(q) + 0.5) * e, d);\n"
@@ -3379,6 +3381,7 @@ static const char *sc_src =
 static NvnTexture *sc_color, *sc_depth;  // the scene pass's targets this frame (while its opaque things are drawn)
 static float sc_vp[16], sc_zn, sc_zf;
 static bool sc_dm1;
+static int sc_tree;  // this draw: a tree shaken bare, its slot 1..7 (stencil bits 1-3), 0: none
 static int sc_mark;  // this draw: 0 as the game has it, 1 the level's model (stencil bit 7 clear), 2 anything else (set),
                      // 3 grass and bushes (bit 6: a light dusting)
 static uint64_t sc_frame = ~0ull, sc_done = ~0ull;
@@ -3581,7 +3584,7 @@ static void snow_cover_encode(void) {
 // Before each draw: while there is snow, the scene's opaque draws (depth pre-pass and colour pass) write stencil bit 7
 // (sc_mark); the cover goes on right before the colour pass's first blended draw (or the next pass, if none)
 static void snow_cover_check(CmdRec *r, bool indexed, Prog *pr) {
-    sc_mark = 0;
+    sc_mark = sc_tree = 0;
     uint64_t frame = renderer_exec_frame();
     if (sc_done == frame || !st.rt.depth) return;
     bool scene = st.rt.ncolor && st.rt.color[0] && st.rt.color[0]->width == wx_scene_w &&
@@ -3674,6 +3677,13 @@ static void snow_cover_check(CmdRec *r, bool indexed, Prog *pr) {
             // (and the scenery actors the rule above gives full snow unless they are trees: the village's big flower
             // plants and props carry no maps the recolours know - a dusting suits them better than a white blanket)
             if (fc[k].fol || (sc_mark == 1 && !fc[k].tree)) sc_mark = 3;
+            else if (sc_mark == 1 && fc[k].tree && st.ubuf[0][3].addr && st.ubuf[0][3].size == 144) {
+                // (a tree: its world position - an actor's transform is vertex constant slot 3, 3x4 rows - for the
+                // bonk that shakes its snow off, weather.c; a shaken one's slot goes to stencil bits 1-3)
+                const float *m = (const float *)(uintptr_t)st.ubuf[0][3].addr;
+                float pos[3] = {m[3], m[7], m[11]};
+                sc_tree = weather_snow_tree(pos);
+            }
         }
     }
     if (!scene || !level || blended || !st.ds[0]) return;
@@ -3945,8 +3955,8 @@ static void draw_one(CmdRec *r, bool indexed) {
                 if (sc_mark) {  // (snow: bit 7 too where it passes - the game's keep / zero / replace become a replace,
                     // the reference keeps the game's bits: snow_cover_check)
                     MTLStencilOperation p = sd.depthStencilPassOperation;
-                    if (p == MTLStencilOperationKeep) sd.writeMask = 0xC0;
-                    else if (p == MTLStencilOperationZero || p == MTLStencilOperationReplace) sd.writeMask |= 0xC0;
+                    if (p == MTLStencilOperationKeep) sd.writeMask = 0xCE;
+                    else if (p == MTLStencilOperationZero || p == MTLStencilOperationReplace) sd.writeMask |= 0xCE;
                     if (p == MTLStencilOperationKeep || p == MTLStencilOperationZero || p == MTLStencilOperationReplace)
                         sd.depthStencilPassOperation = MTLStencilOperationReplace;
                 }
@@ -3959,10 +3969,10 @@ static void draw_one(CmdRec *r, bool indexed) {
     [enc setDepthStencilState:dss];
     last_dsk = dsk;
     last_dss = dss;
-    if (sc_mark) {  // (the game's reference where its pass op was a replace, 0 for a zero; bits 6-7 the mark)
+    if (sc_mark) {  // (the game's reference where its pass op was a replace, 0 for a zero; bits 6-7 the mark, 1-3 a shaken tree)
         uint32_t ops = st.ds[5] | st.ds[6] << 8 | st.ds[7] << 16, ref[2];
         for (int f = 0; f < 2; f++)
-            ref[f] = (st.ds[3] && ((f ? ops >> 20 : ops >> 8) & 0xF) == 3 ? st.stencil_ref[f] & 0x3F : 0) | (sc_mark == 2 ? 0x80 : sc_mark == 3 ? 0x40 : 0);
+            ref[f] = (st.ds[3] && ((f ? ops >> 20 : ops >> 8) & 0xF) == 3 ? st.stencil_ref[f] & 0x31 : 0) | (sc_mark == 2 ? 0x80 : sc_mark == 3 ? 0x40 : 0) | (uint32_t)sc_tree << 1;
         [enc setStencilFrontReferenceValue:ref[0] backReferenceValue:ref[1]];
     } else [enc setStencilFrontReferenceValue:st.stencil_ref[0] backReferenceValue:st.stencil_ref[1]];
     [enc setBlendColorRed:st.blend_color[0] green:st.blend_color[1] blue:st.blend_color[2] alpha:st.blend_color[3]];
@@ -4503,16 +4513,16 @@ static const char *wx_src =
     "}\n"
     // snow Link kicked up (weather_snow_puffs): pf[0].p.x the time now, then the ring - each flies off his feet,
     // falls back and fades
-    "struct PF { float4 p; float4 v; };\n"
+    "struct PF { float4 p; float4 v; float4 g; };\n"
     "vertex VO wx_puff_vs(uint vid [[vertex_id]], uint iid [[instance_id]], constant WF &w [[buffer(0)]],\n"
     "                     constant PF *pf [[buffer(2)]]) {\n"
     "  VO o;\n"
     "  PF q = pf[iid + 1u];\n"
-    "  float age = pf[0].p.x - q.p.w, life = 0.8;\n"
+    "  float age = pf[0].p.x - q.p.w, life = q.g.y;\n"
     "  o.uv = float2(0.0); o.a = 0.0;\n"
     "  if (q.p.w <= 0.0 || age < 0.0 || age > life) { o.pos = float4(0.0, 0.0, -2.0, 1.0); return o; }\n"
-    "  float3 p = q.p.xyz + q.v.xyz * age + float3(0.0, -2.0, 0.0) * age * age;\n"
-    "  p.y = max(p.y, q.p.y - 0.05);\n"
+    "  float3 p = q.p.xyz + q.v.xyz * age + float3(0.0, -q.g.z, 0.0) * age * age;\n"
+    "  p.y = max(p.y, q.g.x - 0.05);\n"
     "  p += normalize(w.cam.xyz - p) * 0.3;\n"  // (as a lying flake: the ground's depth doesn't hide it)
     "  float2 corner = float2((vid & 1u) ? 1.0 : -1.0, (vid & 2u) ? 1.0 : -1.0);\n"
     "  float4 c = clip_of(w, p);\n"
@@ -4690,12 +4700,18 @@ static void weather_encode(void) {
         [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4 instanceCount:(NSUInteger)wf.leaf[3]];
     }
     if ((wf.kind == WEATHER_SNOW || wf.kind == WEATHER_BLIZZARD) && !dbg) {  // (the snow Link kicked up)
-        SnowPuff pf[SNOW_PUFFS + 1];
+        // (past setVertexBytes' 4 KB: a small shared buffer per frame in flight, 4 of them in turn)
+        static id<MTLBuffer> pbuf[4];
+        static int pnext;
+        id<MTLBuffer> b = pbuf[pnext];
+        if (!b) b = pbuf[pnext] = [dev newBufferWithLength:sizeof(SnowPuff) * (SNOW_PUFFS + 1) options:MTLResourceStorageModeShared];
+        pnext = (pnext + 1) & 3;
+        SnowPuff *pf = b.contents;
         weather_snow_puffs(pf + 1);
         memset(&pf[0], 0, sizeof pf[0]);
         pf[0].p[0] = weather_snow_now();
         [e setRenderPipelineState:pipe[3]];
-        [e setVertexBytes:pf length:sizeof pf atIndex:2];
+        [e setVertexBuffer:b offset:0 atIndex:2];
         [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4 instanceCount:SNOW_PUFFS];
     }
     [e endEncoding];

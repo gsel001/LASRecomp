@@ -65,6 +65,7 @@ typedef struct {
     float zr[4];       // the scene depth's range (near, far - near), the trail map's period (world), its size (texels)
     float trail[4];    // x: how long a print takes to fill in again (s), y: test view (1 the cover's mask in red)
     float tone[4];     // the snow's colour in the scene's (linear, pre-tone-map) units (rgb), w: their reference white
+    float shake[8];    // trees shaken bare (a bonk): slot 1..7's share of the cover now (stencil bits 1-3; [0] unused)
 } SnowFrame;
 // The cover for this frame (false: none - not snowing / nothing settled / not the overworld). vp: the scene pass's
 // view-projection (rows). The renderer fills screen, flags.xy and zr.xy.
@@ -75,9 +76,13 @@ bool weather_snow_on(void);  // (any snow lying now: the renderer marks its scen
 typedef struct { float x, y, z, t; float ang, side, len, wid; } SnowPrint;
 int weather_snow_prints(SnowPrint *out, int max);
 // Snow kicked up at Link's feet: p xyz + birth time, v xyz + size (pixels at 1080p); `count` live slots in a ring
-enum { SNOW_PUFFS = 96 };
-typedef struct { float p[4]; float v[4]; } SnowPuff;
+enum { SNOW_PUFFS = 160 };
+// p: xyz + birth time; v: xyz + size (pixels at 1080p); g: x the height it falls to, y its life (s), z gravity
+typedef struct { float p[4]; float v[4]; float g[4]; } SnowPuff;
 int weather_snow_puffs(SnowPuff out[SNOW_PUFFS]);
 float weather_snow_now(void);  // (their time base: the weather's time)
+// A tree drawn this frame (the renderer: a scenery actor with canopy maps; its model's world position): which shaken
+// tree slot it is (1..7, its snow regrowing after a bonk), 0: none
+int weather_snow_tree(const float pos[3]);
 // Game thread, every frame: Link's position for the footprints and the kicked-up snow (snow on the overworld only)
 void weather_player_tick(uint64_t frame);

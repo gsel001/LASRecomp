@@ -165,6 +165,7 @@ bool weather_probe_world(const WeatherFrame *f, int i, float d, float out[3]) {
 static double t = 0;   // the weather's time (s): counted only while it shows (weather_frame)
 static float ground;   // the ground's height (weather_frame: the scene depth at its probe points)
 static float g_cover;  // how much snow lies (0..1)
+static float g_build = -1;  // (s from none to all: LARECOMP_SNOW_BUILD, 90)
 static float env_f(const char *name, float def) { const char *e = getenv(name); return e ? (float)atof(e) : def; }
 
 static pthread_mutex_t g_link_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -211,8 +212,53 @@ static SnowPuff g_puffs[SNOW_PUFFS];  // a ring
 static int g_puff_next;
 static float frand(void);
 
+// ---- trees shaken bare: Link bonks a tree (dashing into it): its snow falls off in a burst and grows back
+typedef struct { float x, y, z; double at; } Shaken;
+static Shaken g_shaken[8];  // slot 1..7 (0 unused)
+static float g_trees[64][3];  // trees drawn this frame (weather_snow_tree), for the next bonk to pick from
+static int g_ntrees, g_trees_next;
+
+int weather_snow_tree(const float pos[3]) {
+    if (g_trees_next < 64) memcpy(g_trees[g_trees_next++], pos, sizeof g_trees[0]);
+    for (int i = 1; i < 8; i++)
+        if (g_shaken[i].at > 0 && fabsf(g_shaken[i].x - pos[0]) < 0.3f && fabsf(g_shaken[i].z - pos[2]) < 0.3f) return i;
+    return 0;
+}
+
+static void shake_tree(float x, float z, float within) {  // (the tree nearest x, z: its snow off, a burst falling)
+    int best = -1;
+    float bd = within * within;
+    for (int i = 0; i < g_ntrees; i++) {
+        float dx = g_trees[i][0] - x, dz = g_trees[i][2] - z;
+        if (dx * dx + dz * dz < bd) bd = dx * dx + dz * dz, best = i;
+    }
+    if (best < 0) {
+        if (getenv("LARECOMP_SNOW_BONK")) LOG("[snow] bonk at %.2f %.2f: no tree near (%d drawn)\n", x, z, g_ntrees);
+        return;
+    }
+    const float *tp = g_trees[best];
+    int s = 1;
+    for (int i = 1; i < 8; i++) {  // (the same tree again, else a free slot, else the oldest)
+        if (fabsf(g_shaken[i].x - tp[0]) < 0.3f && fabsf(g_shaken[i].z - tp[2]) < 0.3f) { s = i; break; }
+        if (g_shaken[i].at < g_shaken[s].at) s = i;
+    }
+    g_shaken[s].x = tp[0], g_shaken[s].y = tp[1], g_shaken[s].z = tp[2], g_shaken[s].at = t;
+    float share = g_cover;  // (a burst as big as the snow it held)
+    for (int k = 0; k < (int)(70 * share); k++) {  // clumps falling from the canopy to the ground around it
+        SnowPuff *q = &g_puffs[g_puff_next++ % SNOW_PUFFS];
+        float a = frand() * 6.2832f, r = 0.3f + frand() * 1.3f;
+        q->p[0] = tp[0] + cosf(a) * r, q->p[1] = tp[1] + 1.6f + frand() * 1.4f, q->p[2] = tp[2] + sinf(a) * r * 0.8f;
+        q->p[3] = (float)t + frand() * 0.25f;
+        q->v[0] = cosf(a) * (0.3f + frand() * 0.8f), q->v[1] = frand() * 0.8f, q->v[2] = sinf(a) * (0.3f + frand() * 0.8f);
+        q->v[3] = 7 + frand() * 8;
+        q->g[0] = tp[1] + 0.05f, q->g[1] = 1.2f + frand() * 0.5f, q->g[2] = 4.5f;
+    }
+    LOG("[snow] tree at %.2f %.2f %.2f shaken bare (slot %d)\n", tp[0], tp[1], tp[2], s);
+}
+
 static void puff(const float at[3], float dx, float dz, bool dash) {
     SnowPuff *q = &g_puffs[g_puff_next++ % SNOW_PUFFS];
+    q->g[0] = at[1], q->g[1] = 0.8f, q->g[2] = 2;
     float a = frand() * 6.2832f, r = frand() * (dash ? 0.25f : 0.15f);
     q->p[0] = at[0] + cosf(a) * r, q->p[1] = at[1] + 0.05f, q->p[2] = at[2] + sinf(a) * r, q->p[3] = (float)t;
     float back = dash ? 1.2f + frand() * 1.6f : 0.3f + frand() * 0.6f, side = (frand() - 0.5f) * (dash ? 2.0f : 1.0f);
@@ -241,6 +287,17 @@ static void snow_link(void) {
     memcpy(lp, p, sizeof lp), lat = at;
     if (fresh || dt <= 0 || dt > 0.25 || d > 2) { stride = 0; return; }  // (first sample, a pause, a warp)
     float v = d / (float)dt;
+    {   // a bonk: dashing (the boots), then stopped dead - the tree just ahead is shaken. LARECOMP_SNOW_BONK=<s>
+        // (test): one then, at the tree nearest Link
+        static float last_ux, last_uz;
+        static double test_at = -2;
+        if (test_at == -2) test_at = getenv("LARECOMP_SNOW_BONK") ? atof(getenv("LARECOMP_SNOW_BONK")) : -1;
+        static float dash_v0 = -1;
+        if (dash_v0 < 0) dash_v0 = env_f("LARECOMP_SNOW_DASH", 6.5f);
+        if (spd > dash_v0 && v < 1.5f && d < 0.05f) shake_tree(p[0] + last_ux * 1.0f, p[2] + last_uz * 1.0f, 2.5f);
+        if (test_at >= 0 && t >= test_at) test_at = -1, shake_tree(p[0], p[2], 12);
+        if (d > 0.01f) last_ux = dx / d, last_uz = dz / d;
+    }
     spd += (fminf(v, 14) - spd) * 0.1f;  // (the samples' host times jitter: walking reads 4.5 +- 3)
     bool ground = fabsf(dy) / (float)dt < 0.8f;  // (not jumping / falling)
     static float dash_v = -1;
@@ -303,6 +360,12 @@ bool weather_snow_cover(SnowFrame *s, const float vp[16]) {
         if (e) sscanf(e, "%f,%f,%f,%f", &tone[0], &tone[1], &tone[2], &tone[3]);
     }
     memcpy(s->tone, tone, sizeof tone);
+    for (int i = 1; i < 8; i++) {  // (a shaken tree grows its snow back at the rate it fell, from none)
+        if (g_shaken[i].at <= 0) continue;
+        float grown = (float)(t - g_shaken[i].at) / (weather_current() == WEATHER_BLIZZARD ? g_build * 0.45f : g_build);
+        s->shake[i] = g_cover > 0 ? fminf(1, grown / g_cover) : 1;
+        if (s->shake[i] >= 1) g_shaken[i].at = 0;
+    }
     return true;
 }
 
@@ -343,6 +406,7 @@ static void weather_wind(WeatherFrame *f, int kind, double dt, float size) {
 }
 
 bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PROBES]) {
+    g_ntrees = g_trees_next, g_trees_next = 0;  // (the trees the scene drew this frame: weather_snow_tree)
     // host time, counted only while the overworld is on screen (a menu or a door stops it)
     static double last = 0;
     struct timespec ts;
@@ -358,9 +422,8 @@ bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PR
     g_outdoors = field;
     int kind = weather_current();
     if (field && dt > 0 && dt < 0.25) {  // the snow on the ground: builds while it snows, melts otherwise
-        static float build = -1;
-        if (build < 0) build = env_f("LARECOMP_SNOW_BUILD", 90), g_cover = env_f("LARECOMP_SNOW_COVER", 0);  // (test)
-        g_cover = snowy(kind) ? fminf(1, g_cover + (float)dt / (kind == WEATHER_BLIZZARD ? build * 0.45f : build))  // (a blizzard: faster)
+        if (g_build < 0) g_build = env_f("LARECOMP_SNOW_BUILD", 90), g_cover = env_f("LARECOMP_SNOW_COVER", 0);  // (test)
+        g_cover = snowy(kind) ? fminf(1, g_cover + (float)dt / (kind == WEATHER_BLIZZARD ? g_build * 0.45f : g_build))  // (a blizzard: faster)
                               : fmaxf(0, g_cover - (float)dt / 30);
     }
     if (!field || kind == WEATHER_OFF || g_cam_frame != frame) return false;
