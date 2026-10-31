@@ -224,21 +224,17 @@ def build(seed_dir):
         for l in S['dungeon-entrances']:
             a, b = [x.strip() for x in l.split('->')]
             out.append(f'- {DUNGEONS.get(a, a)} entrance leads into {DUNGEONS.get(b, b)}')
-    if LAB:
+    if LAB:  # (where each dungeon door leads, and Eagle's Tower's way out: its only link to the other wings)
         out.append('')
-        out.append('# Labyrinth')
-        out.append(f"{LAB.get('mode', '').capitalize()} layout. Small keys are shared; "
-                   f"{LAB.get('small-keys', 0)} in the seed.")
+        out.append('# Dungeon entrances')
         lv_wing = {v: k for k, v in LAB.get('wings', {}).items()}
-        out.append('## Dungeon doors (outside door -> where it leads)')
         for sec, a in sorted(LAB.get('arrivals', {}).items()):
-            out.append(f"- {DUNGEONS.get(sec, sec).split(' (')[0]}  ->  Wing {lv_wing.get(a[0], '?')}, room {a[1]}")
-        et = LAB.get('eagle-tower') or {}
+            out.append(f"- {DUNGEONS.get(sec, sec).split(' (')[0]}  ->  Wing {lv_wing.get(a[0], '?')} (Room {a[1]})")
+        et, w = LAB.get('eagle-tower') or {}, lv_wing.get('Lv07EagleTower', '7')
+        out.append(f"- Eagle's Tower  ->  Wing {w}")
         if et.get('exit-leads-to'):
             t = et['exit-leads-to']
-            w = lv_wing.get('Lv07EagleTower', '7')
-            out.append(f"- Eagle's Tower  ->  Wing {w}, its own entrance")
-            out.append(f"- Wing {w}'s south doorway in room 08B  ->  Wing {lv_wing.get(t[0], '?')}, room {t[1]}")
+            out.append(f"- Wing {w} (Room {et['exit'][1]})  ->  Wing {lv_wing.get(t[0], '?')} (Room {t[1]})")
     ent = os.path.join(seed_dir, f'entrances_{seed}.txt')
     if os.path.exists(ent):
         out.append('')
