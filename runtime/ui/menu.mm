@@ -646,7 +646,7 @@ static void tab_cosmetics(void) {
         int shown = 0;
         if (seed || cycle) names[0] = LN("Seed"), opt_disable_next();
         opt_choice("Weather", seed || cycle ? &shown : &g_settings.weather, names, N_WEATHERS, 0,
-                   cycle ? "This seed controls the weather." : "Rain, snow, a storm or a blizzard on the overworld.");
+                   cycle ? "This seed picked the weather. Commit to it!" : "Rain, snow, a storm or a blizzard on the overworld.");
     }
 #endif
     opt_end();
