@@ -200,6 +200,12 @@ static uint64_t g_link_n;     // (samples so far)
 static float g_wind[2];       // a blizzard gust's velocity now - not its steady wind (world x, z per s: weather_wind, render thread)
 static double g_wind_at;      // (host time then)
 
+static uint64_t cpu_ns(void) {  // (LARECOMP_SNOW_TIME's timings: a monotonic clock, every platform)
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec;
+}
+
 static double host_now(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -210,13 +216,13 @@ static bool level_is_field(void);
 void weather_player_tick(Cpu *c, uint64_t frame) {
     static int tm = -1;  // LARECOMP_SNOW_TIME=1 (test): this tick's CPU time (game thread), mean every 120 frames
     if (tm < 0) tm = getenv("LARECOMP_SNOW_TIME") != NULL;
-    uint64_t t0 = tm ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0;
+    uint64_t t0 = tm ? cpu_ns() : 0;
     void weather_player_tick_(Cpu *c, uint64_t frame);
     weather_player_tick_(c, frame);
     if (tm) {
         static uint64_t sum;
         static int n;
-        sum += clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0;
+        sum += cpu_ns() - t0;
         if (++n == 120) LOG("[snow] game thread CPU %.2f us a frame\n", sum / 120 / 1e3), sum = 0, n = 0;
     }
 }
@@ -697,12 +703,12 @@ bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PR
     if (snowy(kind)) {
         static int tm = -1;  // LARECOMP_SNOW_TIME=1 (test): the footprints' and kicked-up snow's CPU time (render thread)
         if (tm < 0) tm = getenv("LARECOMP_SNOW_TIME") != NULL;
-        uint64_t t0 = tm ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0;
+        uint64_t t0 = tm ? cpu_ns() : 0;
         snow_link();
         if (tm) {
             static uint64_t sum;
             static int n;
-            sum += clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0;
+            sum += cpu_ns() - t0;
             if (++n == 120) LOG("[snow] footprints CPU %.2f us a frame\n", sum / 120 / 1e3), sum = 0, n = 0;
         }
     }
