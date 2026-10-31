@@ -720,15 +720,13 @@ static void rows_extra_checks(void) {
     opt_toggle("Bushsanity", &g_opts.bushes, false,
                "Every bush on the island hides an item, about 310 more checks. Bushes you haven't cut yet are golden.");
     opt_toggle("Digsanity", &g_opts.digs, false,
-               "Every diggable tile on the overworld is a check, about 5,000 more, and most important items end up "
-               "buried. Cut grass and bushes before you dig. Holes stay dug, so you can see where you've been.");
+               "Every diggable tile on the overworld is a check, about 5,000 more. Holes stay dug.");
     opt_toggle("Shellsanity", &g_opts.shellsanity, false, "Every hidden Secret Seashell spot holds an item from the pool.");
     opt_toggle("Applesanity", &g_opts.apples, false, "Each apple tree holds 3 items from the pool.");
     opt_toggle("Rocksanity", &g_opts.rocks, false, "Every rock you can lift on the overworld hides an item from the pool.");
     static const char *ksn[] = {LN("Off"), LN("Small Keys"), LN("Small + Nightmare"), LN("All dungeon items")};
     opt_choice("Keysanity", &g_opts.keysanity, ksn, 4, 0,
-               "Dungeon keys can turn up anywhere in the world. The last choice does the same for every dungeon item. "
-               "Keys only open doors in their own dungeon, and the Items screen shows how many you have for each.");
+               "Dungeon keys can be anywhere. The last choice does this for every dungeon item.");
     opt_toggle("Potsanity", &g_opts.pots, false,
                "Every pot you can lift in houses, caves and dungeons hides an item, about 400 more checks. Pots you "
                "haven't checked yet are golden.");
