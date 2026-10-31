@@ -651,8 +651,8 @@ static void rows_general(void) {
     opt_toggle("Disable Guardian Acorns / Pieces of Power", &g_opts.no_buffs, false,
                "Disables Guardian Acorns and Pieces of Power from spawning.");
     opt_own_next();  // (the player's own, not part of a seed)
-    if (opt_toggle("Check tracker on overworld map", &g_settings.tracker, true,
-                   "The overworld map marks the checks you have and haven't done yet."))
+    if (opt_toggle("Overworld and Dungeon Check Tracker", &g_settings.tracker, true,
+                   "The overworld and dungeon maps show which checks you can reach with your items."))
         settings_save();
     opt_toggle("Fast Egg", &g_opts.fast_egg, true, "First drop in the Wind Fish Egg drops you to the boss.");
 }
