@@ -46,7 +46,8 @@ FLAGS = ['bomb_bag', 'powder_bag', 'environments', 'pets_in_dungeons', 'skip_sto
          'pots', 'no_buffs', 'bushes', 'pet_rooster', 'pet_ghost', 'pet_marin', 'trendsanity', 'boss_souls',
          'hookshot_any', 'digs', 'miniboss_souls', 'no_start_sword', 'no_start_shield', 'no_start_ocarina',
          'tunic_upgrades', 'shellsanity', 'race', 'random_cosmetics', 'apples', 'chest_looks', 'key_rings', 'hints',
-         'rocks']  # (order after random_cosmetics: apples, chest looks, key rings, hints, rocks)
+         'rocks', 'weather_cycle']  # (order after random_cosmetics: apples, chest looks, key rings, hints, rocks,
+                                    # weather cycle)
 ROOM_IDS = {'off': 0, 'coupled': 2, 'decoupled': 3}  # room_shuffle in the ID (1: the retired Coherent)
 BITS = 150  # (v5: 30 characters; v4 IDs had 125 - decode reads both)
 TIMEOUT = 900  # (seconds per seed)

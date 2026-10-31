@@ -51,8 +51,18 @@ enum { WEATHER_PROBES = 5 };
 extern const float g_weather_probe_uv[WEATHER_PROBES][2];
 bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PROBES]);
 bool weather_probe_world(const WeatherFrame *f, int i, float d, float out[3]);
-// The weather in effect now (WEATHER_OFF/RAIN/SNOW/STORM/BLIZZARD): the setting, its random roll, or the seed's own
+// The weather in effect now (WEATHER_OFF/RAIN/SNOW/STORM/BLIZZARD): the seed's weather cycle, else the setting, its
+// random roll, or the seed's own cosmetics' pick
 int weather_current(void);
+
+// ---- the randomizer's weather cycle (seed option "weather-cycle"; runtime/nvn/weather_cycle.c): the weather
+// changes on its own, saved with each save slot; the Cosmetics tab's Weather row is locked while it's on
+bool weather_cycle_on(void);
+int weather_cycle_kind(float *level);  // the weather showing now and how strongly (0..1: a change fading)
+void weather_cycle_tick(void);         // game thread, every frame
+void weather_cycle_scene(void);        // the renderer: a scene composite was drawn (the cycle's clock runs)
+void weather_cycle_save_read(const char *path, uint64_t addr, int64_t off, int64_t size);     // runtime/services/fs.c
+void weather_cycle_save_written(const char *path, uint64_t addr, int64_t off, int64_t size);
 
 // ---- snow on the ground (snow only; prototype). While it snows, surfaces facing up turn white over ~1.5 minutes
 // (patchy at first), it melts again in ~30 s once the weather is something else. Drawn by the renderer INSIDE the

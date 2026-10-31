@@ -4787,6 +4787,7 @@ static void weather_encode(void) {
     static long off = -1;  // (LARECOMP_WEATHER_SKIP=1: the weather computed but not drawn - GPU cost A/B)
     if (off < 0) off = getenv("LARECOMP_WEATHER_SKIP") ? atol(getenv("LARECOMP_WEATHER_SKIP")) : 0;
     uint64_t frame = renderer_exec_frame();
+    weather_cycle_scene();  // (the weather cycle's clock runs while the game draws its scene)
     NvnTexture *win = st.rt.ncolor ? st.rt.color[0] : NULL, *dep = wx_depth;
     extern bool mirror_scene_size(uint32_t sw, uint32_t sh, uint32_t w, uint32_t h);
     int why = off ? 1 : !win ? 2 : !dep ? 3 : wx_depth_frame != frame ? 4 : fabsf(wx_zf - wx_zn) < 1e-6f ? 5 :

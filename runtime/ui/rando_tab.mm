@@ -147,6 +147,7 @@ struct GenOpts {
     bool key_rings = false;   // key-rings: each dungeon's small keys as one key ring (tools/rando/key_rings.py)
     bool hints = false;       // hints: owl statues and phone booths tell about the seed (tools/rando/seed_hints.py)
     bool rocks = false;       // rocks: every overworld rock hides an item (tools/rando/rocks.py)
+    bool weather_cycle = false;  // weather-cycle: the overworld's weather changes on its own (runtime/nvn/weather_cycle.c)
 };
 static GenOpts g_opts;
 
@@ -196,7 +197,8 @@ static bool *opt_flags(GenOpts &o, int i) {  // the yes/no options, in ID order 
                  &o.pet_rooster, &o.pet_ghost, &o.pet_marin, &o.trendsanity, &o.boss_souls, &o.hookshot_any,
                  &o.digs, &o.miniboss_souls, &o.no_start_sword, &o.no_start_shield, &o.no_start_ocarina,
                  &o.tunic_upgrades, &o.shellsanity, &o.race, &o.random_cosmetics, &o.apples, &o.chest_looks,
-                 &o.key_rings, &o.hints, &o.rocks};  // (order after random_cosmetics: apples, chest_looks, key_rings, hints, rocks)
+                 &o.key_rings, &o.hints, &o.rocks, &o.weather_cycle};  // (order after random_cosmetics: apples,
+                                                                         // chest_looks, key_rings, hints, rocks, weather_cycle)
     return i < (int)(sizeof f / sizeof *f) ? f[i] : NULL;
 }
 
@@ -423,6 +425,7 @@ static void start_generation(void) {
     fprintf(f, " \"pots\": %s, \"no-buff-drops\": %s, \"bushes\": %s, \"digs\": %s,\n", g_opts.pots ? "true" : "false",
             g_opts.no_buffs ? "true" : "false", g_opts.bushes ? "true" : "false", g_opts.digs ? "true" : "false");
     if (g_opts.rocks) fprintf(f, " \"rocks\": true,\n");  // (off: not written, seeds as before)
+    if (g_opts.weather_cycle) fprintf(f, " \"weather-cycle\": true,\n");  // (likewise)
     fprintf(f, " \"tunic-upgrades\": %s, \"shellsanity\": %s, \"random-cosmetics\": %s,\n",
             g_opts.tunic_upgrades ? "true" : "false", g_opts.shellsanity ? "true" : "false",
             g_opts.random_cosmetics ? "true" : "false");
@@ -830,6 +833,9 @@ static void rows_other(void) {
     opt_toggle("Randomize music", &g_opts.randomize_music, false, "The game's music tracks are shuffled.");
     opt_toggle("Random cosmetics", &g_opts.random_cosmetics, false,
                "The seed gets its own random colors. Your choices in the Cosmetics tab still win.");
+    opt_toggle("Weather cycle", &g_opts.weather_cycle, false,
+               "The weather changes on its own: sunny, rain or snow, then storms and blizzards. Lightning can strike "
+               "Link and blizzard gusts push him. The Cosmetics tab's Weather is locked.");
     opt_toggle("Spoiler log", &g_opts.spoiler, true, "Writes where every item is, to read from the seed's Spoiler log.");
     opt_toggle("Race mode", &g_opts.race, false,
                "The spoiler log stays shut until the credits, and the title screen shows a seed hash to compare.");

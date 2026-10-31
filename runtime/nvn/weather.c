@@ -58,6 +58,7 @@ static bool snowy(int kind) { return kind == WEATHER_SNOW || kind == WEATHER_BLI
 static bool g_outdoors;
 
 int weather_current(void) {
+    if (weather_cycle_on()) return weather_cycle_kind(NULL);
     int s = setting();
     if (s == WEATHER_RANDOM) return g_random;
     if (s != WEATHER_OFF) return s;
@@ -221,6 +222,7 @@ void weather_player_tick(Cpu *c, uint64_t frame) {
 }
 static void strike_tick(Cpu *c);
 void weather_player_tick_(Cpu *c, uint64_t frame) {
+    weather_cycle_tick();
     int kind = weather_current();
     if (!g_outdoors || !(snowy(kind) || kind == WEATHER_STORM) || !level_is_field()) return;
     if (kind == WEATHER_STORM) strike_tick(c);
@@ -498,7 +500,7 @@ static void storm_strikes(void) {
                    __atomic_load_n(&g_link_ok, __ATOMIC_ACQUIRE);
         static int harm_env = -1;  // LARECOMP_WEATHER_HARM=1 (test): the shock on, as the randomizer's option will
         if (harm_env < 0) harm_env = getenv("LARECOMP_WEATHER_HARM") != NULL;
-        bool harm = g_harm || harm_env;
+        bool harm = g_harm || harm_env || weather_cycle_on();  // (the seed's weather cycle: its storms hurt)
         if (hit && harm) __atomic_store_n(&g_shock, 1, __ATOMIC_RELEASE);
         if (hit) LOG("[weather] lightning hit Link%s\n", harm ? "" : " (looks only: no shock)");
     }
@@ -594,7 +596,7 @@ void weather_wind_push(bool on) { g_push = on; }
 void rt_wind_push(Cpu *c) {
     static int env = -1;  // LARECOMP_WEATHER_PUSH=1 (test): on, as the randomizer's option will
     if (env < 0) env = getenv("LARECOMP_WEATHER_PUSH") != NULL;
-    if (!(g_push || env) || weather_current() != WEATHER_BLIZZARD || !g_outdoors) return;
+    if (!(g_push || env || weather_cycle_on()) || weather_current() != WEATHER_BLIZZARD || !g_outdoors) return;
     uint64_t link = c->x[19];
     uint8_t id = LD8(link + 0x4ed);
     if (id >= 32 || !((1u << id) & (1u << 0 | 1u << 1 | 1u << 2 | 1u << 10 | 1u << 26))) return;
@@ -622,7 +624,7 @@ void rt_wind_push(Cpu *c) {
 // up and back down smoothly. wind[0..1]: the drift so far (wrapped at the volume's size: the particles' positions wrap with it),
 // wind[2..3]: the velocity now. LARECOMP_BLIZZARD_GUST=<s> (test): the first gust then, from LARECOMP_BLIZZARD_DIR
 // (degrees, 0 = screen right, 90 = screen up; every gust)
-static void weather_wind(WeatherFrame *f, int kind, double dt, float size) {
+static void weather_wind(WeatherFrame *f, int kind, double dt, float size, float level) {
     static double dx, dz, gust_at = -1, gust_len;
     static float gust_ang, gust_str, base_ang;
     float vx, vz, gx = 0, gz = 0;  // (gx, gz: a blizzard gust's share - what pushes Link)
@@ -643,6 +645,7 @@ static void weather_wind(WeatherFrame *f, int kind, double dt, float size) {
         env = env * env * (3 - 2 * env);  // (smooth ramps)
         base_ang += (float)dt * 0.05f;
         // screen right = world +x, screen up = world -z (the overworld's camera looks north)
+        env *= level;  // (a blizzard fading in or out: weaker gusts)
         gx = env * gust_str * cosf(gust_ang), gz = -env * gust_str * sinf(gust_ang);
         vx = 2 * cosf(base_ang) + gx, vz = -2 * sinf(base_ang) + gz;
     } else {
@@ -681,7 +684,8 @@ bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PR
         if (setting() == WEATHER_RANDOM) LOG("[weather] random: %d\n", g_random);
     }
     g_outdoors = field;
-    int kind = weather_current();
+    float level = 1;  // (the weather cycle: a change fading the old weather out and the new one in)
+    int kind = weather_cycle_on() ? weather_cycle_kind(&level) : weather_current();
     if (field && dt > 0 && dt < 0.25) {  // the snow on the ground: builds while it snows, melts otherwise
         if (g_build < 0) g_build = env_f("LARECOMP_SNOW_BUILD", 90), g_cover = env_f("LARECOMP_SNOW_COVER", 0);  // (test)
         g_cover = snowy(kind) ? fminf(1, g_cover + (float)dt / (kind == WEATHER_BLIZZARD ? g_build * 0.45f : g_build))  // (a blizzard: faster)
@@ -756,7 +760,7 @@ bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PR
     for (int i = 0; i < 3; i++) f->cam[i] = cp[i];
     // (fall speeds fixed: with the time in them, any change would move every drop. The wind's drift is integrated
     // over time instead - weather_wind - so a gust carries the flakes along without moving them back or ahead)
-    weather_wind(f, kind, dt > 0 && dt < 0.25 ? dt : 0, size);
+    weather_wind(f, kind, dt > 0 && dt < 0.25 ? dt : 0, size, level);
     if (snow) {
         f->count = bliz ? 5200 : 2000;
         f->shape[0] = 0, f->shape[1] = bliz ? 8.0f : 9.0f, f->shape[2] = bliz ? 3.2f : 2.2f, f->shape[3] = bliz ? 0.3f : 0.5f;
@@ -785,12 +789,18 @@ bool weather_frame(WeatherFrame *f, uint64_t frame, const float probe[WEATHER_PR
             else f->leaf[0] = -1, f->leaf[1] = f->leaf[2] = 1;  // (-1: the game's own green / the texture's colour)
             f->leaf[3] = 40;  // (in the volume, 34 x 34: ~15 on screen)
         }
-        if (storm) {
+        if (storm && level > 0.9f) {  // (not while a storm is fading in or out)
             storm_strikes();
             float fl = storm_flash(t, frame);
             f->fill[0] = fl * 0.22f, f->fill[1] = fl * 0.25f, f->fill[2] = fl * 0.30f;
             f->fill[3] += (1 - f->fill[3]) * fl;  // (the flash lifts the overcast too)
         }
+    }
+    if (level < 1) {  // (fading: fewer drops, less overcast and haze; lightning is left for the full storm)
+        f->count = (uint32_t)(f->count * level), f->splashes = (uint32_t)(f->splashes * level);
+        f->leaf[3] *= level;
+        for (int i = 0; i < 3; i++) f->fill[i] *= level;
+        f->fill[3] = 1 - (1 - f->fill[3]) * level;
     }
     f->flags[3] = snow ? 2 : 1;
     static int logged;  // LARECOMP_LOG_WEATHER: the camera and volume (calibration)

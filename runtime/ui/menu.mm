@@ -533,6 +533,7 @@ static void tab_display(void) {
 }
 
 extern "C" bool cosmetics_seed_on(void);  // runtime/cosmetics_seed.c
+extern "C" bool weather_cycle_on(void);   // runtime/nvn/weather_cycle.c
 
 // Cosmetics: tunic / heart colours, live (runtime/nvn/texpatch.c), and recolours by draw (runtime/nvn/recolour*.c);
 // a seed made with "Random cosmetics" fills the rows left on Default (shown as "Seed: <colour>")
@@ -600,7 +601,10 @@ static void tab_cosmetics(void) {
         const char *names[N_WEATHERS];
         for (int i = 0; i < N_WEATHERS; i++) names[i] = g_weathers[i];
         if (cosmetics_seed_on()) names[0] = "Seed";
-        opt_choice("Weather", &g_settings.weather, names, N_WEATHERS, 0, "Rain, snow, a storm or a blizzard on the overworld.");
+        bool cycle = weather_cycle_on();  // (the seed's weather cycle: the weather changes on its own - locked)
+        if (cycle) opt_disable_next();
+        opt_choice("Weather", &g_settings.weather, names, N_WEATHERS, 0,
+                   cycle ? "This seed's weather changes on its own." : "Rain, snow, a storm or a blizzard on the overworld.");
     }
 #endif
     opt_end();
