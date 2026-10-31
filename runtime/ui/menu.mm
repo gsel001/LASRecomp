@@ -604,7 +604,7 @@ static void tab_cosmetics(void) {
         bool cycle = weather_cycle_on();  // (the seed's weather cycle: the weather changes on its own - locked)
         if (cycle) opt_disable_next();
         opt_choice("Weather", &g_settings.weather, names, N_WEATHERS, 0,
-                   cycle ? "This seed's weather changes on its own." : "Rain, snow, a storm or a blizzard on the overworld.");
+                   cycle ? "This seed controls the weather." : "Rain, snow, a storm or a blizzard on the overworld.");
     }
 #endif
     opt_end();

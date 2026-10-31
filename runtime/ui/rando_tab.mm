@@ -834,8 +834,8 @@ static void rows_other(void) {
     opt_toggle("Random cosmetics", &g_opts.random_cosmetics, false,
                "The seed gets its own random colors. Your choices in the Cosmetics tab still win.");
     opt_toggle("Weather cycle", &g_opts.weather_cycle, false,
-               "The weather changes on its own: sunny, rain or snow, then storms and blizzards. Lightning can strike "
-               "Link and blizzard gusts push him. The Cosmetics tab's Weather is locked.");
+               "The overworld weather changes on its own: sunny, then rain or snow, then a storm or blizzard, and back. "
+               "Lightning can shock Link and blizzard winds push him.");
     opt_toggle("Spoiler log", &g_opts.spoiler, true, "Writes where every item is, to read from the seed's Spoiler log.");
     opt_toggle("Race mode", &g_opts.race, false,
                "The spoiler log stays shut until the credits, and the title screen shows a seed hash to compare.");
