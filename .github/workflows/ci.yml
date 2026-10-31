@@ -293,9 +293,12 @@ jobs:
 
   # Windows on ARM (experimental builds): the same app build and Windows tests natively on an ARM64 runner, MSYS2
   # CLANGARM64 as tools/setup_windows.ps1 sets it up there. Left out: the x86 SIMD rounding test (-mfma) and the shader
-  # translator fuzz (the same on every platform; the x64 job runs it).
+  # translator fuzz (the same on every platform; the x64 job runs it). -pthread on every test (CC for the Python ones):
+  # CLANGARM64's libraries don't pull winpthreads in for us, as the Makefile's -lpthread there.
   windows-arm64:
     runs-on: windows-11-arm
+    env:
+      CC: clang -pthread  # (the Python tests' compiler)
     defaults:
       run:
         shell: msys2 {0}
