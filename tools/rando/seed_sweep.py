@@ -289,8 +289,8 @@ def labyrinth_check(out_dir):
 
 def labyrinth_census(full_dir, romfs):
     """A full Labyrinth seed, counted from its written game files: the locks (locked doors by their 'opened' flag,
-    keyhole blocks) of every cell the wings have (dungeon_map.tsv) + Eagle's Tower's vanilla keys must be the small keys
-    placed; every row into another level must start and end at a cell that exists. -> [problems]"""
+    keyhole blocks) of every cell the wings have (dungeon_map.tsv, Eagle's Tower too) + the spares must be the small
+    keys placed; every row into another level must start and end at a cell that exists. -> [problems]"""
     sys.path.insert(0, LAS)
     from RandomizerCore.Tools import leb
     info = json.load(open(os.path.join(full_dir, 'labyrinth.json')))
@@ -309,10 +309,8 @@ def labyrinth_census(full_dir, romfs):
                 elif a.type == 0x102:
                     locks.add((lv, cell, 'block', flag))
     probs = []
-    et = info.get('small-keys', 0) - info.get('spare-keys', 0) - len(locks)
-    if et != 3:  # (Eagle's Tower: kept whole, its 3 vanilla keys; + the spares)
-        probs.append(f'{len(locks)} locks in the wings + 3 in Eagle\'s Tower + {info.get("spare-keys", 0)} spare, '
-                     f'{info.get("small-keys")} small keys')
+    if info.get('small-keys', 0) - info.get('spare-keys', 0) != len(locks):
+        probs.append(f'{len(locks)} locks + {info.get("spare-keys", 0)} spare, {info.get("small-keys")} small keys')
     lp = os.path.join(full_dir, 'labyrinth_links.tsv')
     for ln in open(lp) if os.path.exists(lp) else ():
         if ln.startswith('#'):

@@ -690,8 +690,8 @@ def apply(cat, romfs, layouts, jump_rows, logic_defs, item_defs, settings, extra
     """Rewrites logic_defs / item_defs for the shuffled dungeons. extra_locations: {name: room} (pots...).
     Returns a summary string. Sets settings['dungeon-of'] (location -> 'Dn') and adds unreachable checks to
     settings['excluded-locations']. lab: the Labyrinth (tools/rando/labyrinth.py) - {'arrivals': {door region: (level,
-    cell)}, 'et_locks': n}: one graph across every dungeon (jump_rows hold the rows into other levels too), one shared
-    small-key counter (key-D{SHARED_KEY_N}), Eagle's Tower kept whole as one node."""
+    cell)}}: one graph across every dungeon (jump_rows hold the rows into other levels too), one shared small-key
+    counter (key-D{SHARED_KEY_N}). Eagle's Tower is a wing too (its rooms shuffled within it, one doorway out)."""
     import dungeon_gen
     # (dungeon_gen names cells like rooms, 'Lv01TailCave_08D'; here cells are '08D')
     layouts = {lv: {c.rsplit('_', 1)[1]: room for c, room in L.items()} for lv, L in layouts.items()}
@@ -954,12 +954,6 @@ def apply(cat, romfs, layouts, jump_rows, logic_defs, item_defs, settings, extra
             ks.append(check_keys[loc])
             per_wing[d] = per_wing.get(d, 0) + 1
         total = lab_info['total']
-        for loc, v in logic_defs.items():  # Eagle's Tower (kept whole): its own conditions name the shared key
-            if v.get('type') != 'item' or not loc.startswith('D7-') or loc in excluded or vanilla_check(loc, v, settings):
-                continue
-            need = [int(x) for x in re.findall(rf'key-D{SHARED_KEY_N}:(\d+)', v.get('condition-basic', ''))]
-            ks.append(max([lab_info['et_keys']] + need))
-            per_wing['D7'] = per_wing.get('D7', 0) + 1
         ks += [total] * sum(roomless_checks(settings).values())
         ks.sort()
         for j in range(1, total + 1):
@@ -968,9 +962,9 @@ def apply(cat, romfs, layouts, jump_rows, logic_defs, item_defs, settings, extra
                                                      f'{sum(1 for k in ks if k <= j - 1)} checks to go in')
                 break
         else:
-            short = [d for d in sorted({f'D{LEVELS[lv][0]}' for lv in layouts} | {'D7'})
+            short = [d for d in sorted({f'D{LEVELS[lv][0]}' for lv in layouts})
                      if per_wing.get(d, 0) < dungeon_items(settings)]
-            if short or len(ks) < total + SPARE_KEYS + dungeon_items(settings) * (len(layouts) + 1):
+            if short or len(ks) < total + SPARE_KEYS + dungeon_items(settings) * len(layouts):
                 settings['room-logic-unfillable'] = f'labyrinth: too few checks for the dungeon items ({short})'
     elif settings.get('keysanity', 'off') == 'off':
         need_k = {}  # 'Dn' -> [keys each check of the dungeon needs]
@@ -1007,9 +1001,8 @@ def apply(cat, romfs, layouts, jump_rows, logic_defs, item_defs, settings, extra
                 for lv_ in ('advanced', 'glitched', 'hell'):
                     logic_defs[k].pop('condition-' + lv_, None)
     if lab:
-        return (f'labyrinth of {len(layouts)} dungeons + Eagle\'s Tower, {rewritten} checks rewritten, {unused} in unused '
-                f'rooms (excluded), {fallback} without a room (vanilla condition), {lab_info["total"]} small keys '
-                f'(shared; {lab_info["total"] - lab_info["et_locks"]} locks outside Eagle\'s Tower)')
+        return (f'labyrinth of {len(layouts)} dungeons, {rewritten} checks rewritten, {unused} in unused rooms '
+                f'(excluded), {fallback} without a room (vanilla condition), {lab_info["total"]} small keys (shared)')
     return (f'{len(layouts)} dungeons, {rewritten} checks rewritten, {unused} in unused rooms (excluded), '
             f'{fallback} without a room (vanilla condition), locks {dict(sorted(lock_count.items()))}')
 
@@ -1150,7 +1143,7 @@ SHARED_KEY_N = 1
 # player may have spent elsewhere; the spares make the counts reachable sooner (more keys to find), never lower them.
 SPARE_KEYS = int(os.environ.get('LARECOMP_LAB_SPARE_KEYS', 5))
 ET_LEVEL = 'Lv07EagleTower'
-ET_NODE = (ET_LEVEL, 'ET')
+ET_NODE = (ET_LEVEL, '08B')  # (its entrance: where its overworld door arrives and its doorway out leaves from)
 
 
 def block_atom(n, level, b, lab=None):
@@ -1158,9 +1151,9 @@ def block_atom(n, level, b, lab=None):
     return f'LOCK|{n}|{level}:block{b}' if lab else f'LOCK|{n}|block{b}'
 
 
-def labyrinth_graph(cat, romfs, layouts, rows, et_locks):
-    """-> ({node: [(node, frozenset req)]}, distinct locks): node = (level, short cell) or ET_NODE. layouts: {level:
-    {'08D': room}}; rows: door_jumps rows of every level, incl. rows into another level (10 fields)."""
+def labyrinth_graph(cat, romfs, layouts, rows):
+    """-> ({node: [(node, frozenset req)]}, distinct locks): node = (level, short cell). layouts: {level: {'08D': room}}
+    (Eagle's Tower too); rows: door_jumps rows of every level, incl. rows into another level (11 fields)."""
     import dungeon_gen
     edges, flags = {}, set()
     inward = dungeon_gen.inward_only(romfs) if romfs else {}
@@ -1168,17 +1161,14 @@ def labyrinth_graph(cat, romfs, layouts, rows, et_locks):
         e, _ = level_graph(cat, romfs, level, L, rows, dungeon_gen.openings, key_n=SHARED_KEY_N, flag_sink=flags)
         for c, outs in e.items():
             edges[(level, c)] = [((level, t), r) for t, r in outs]
-    # Eagle's Tower: its own locks, reachable (and wastable) once Link is inside
-    edges[ET_NODE] = [(ET_NODE, frozenset(f'LOCK|{SHARED_KEY_N}|ET{i}' for i in range(et_locks)))] if et_locks else []
     for row in rows:
         if not (len(row) > 10 and row[10] != row[0]):
             continue
-        src = ET_NODE if row[0] == ET_LEVEL else (row[0], row[1])
-        dst = ET_NODE if row[10] == ET_LEVEL else (row[10], row[5])
+        src, dst = (row[0], row[1]), (row[10], row[5])
         if src not in edges or dst not in edges or src == dst:
             continue
         req = frozenset()
-        if src != ET_NODE:  # (leaving Eagle's Tower by its doorway out: nothing in the way)
+        if src != ET_NODE:  # (leaving Eagle's Tower by its doorway out, the game's own door: nothing in the way)
             level, cell = src
             room, n = layouts[level][cell], LEVELS[level][0]
             if inward.get((room, row[2], int(row[3]))):
@@ -1288,16 +1278,16 @@ def labyrinth_boss_ok(cat, edges, starts, layouts):
     return True
 
 
-def labyrinth_keys(edges, starts, flags, et_locks):
+def labyrinth_keys(edges, starts, flags):
     """(worst-case key counts {lock atom: keys}, total small keys): one key per lock of the whole Labyrinth."""
     kc = key_counts(edges, list(starts))
-    return kc, max(len(flags) + et_locks, len(kc))
+    return kc, max(len(flags), len(kc))
 
 
-def labyrinth_fill_ok(cat, romfs, edges, starts, flags, layouts, settings, et_locks):
+def labyrinth_fill_ok(cat, romfs, edges, starts, flags, layouts, settings):
     """fill_ok for the whole Labyrinth (keysanity off): the shared small keys go into any of its checks - key j needs a
     check that takes at most j-1 keys - and every wing keeps room for its own Nightmare Key, Map, Compass, Beak."""
-    kc, total = labyrinth_keys(edges, starts, flags, et_locks)
+    kc, total = labyrinth_keys(edges, starts, flags)
     node_k = {node: k for node, (_, k) in keyed_terms(edges, starts, kc, total).items() if k is not None}
     lr = json.load(open(os.path.join(HERE, 'location_rooms.json')))
     per_room = {}
@@ -1310,11 +1300,6 @@ def labyrinth_fill_ok(cat, romfs, edges, starts, flags, layouts, settings, et_lo
             where.setdefault(room, []).append((level, cell))
     ks, per_wing = [], {}
     for room, count in per_room.items():
-        if room.startswith(ET_LEVEL + '_'):  # (inside Eagle's Tower: as if behind all of its locks)
-            if ET_NODE in node_k:
-                ks += [min(total, node_k[ET_NODE] + et_locks)] * count
-                per_wing[7] = per_wing.get(7, 0) + count
-            continue
         cells = [p for p in where.get(room, ()) if p in node_k]
         if not cells:
             continue
@@ -1329,8 +1314,8 @@ def labyrinth_fill_ok(cat, romfs, edges, starts, flags, layouts, settings, et_lo
     if not all(sum(1 for k in ks if k <= j - 1) >= j for j in range(1, total + 1)):
         return False
     need = dungeon_items(settings or {})
-    return all(per_wing.get(LEVELS[lv][0], 0) >= need for lv in list(layouts) + [ET_LEVEL]) and \
-        len(ks) >= total + SPARE_KEYS + need * (len(layouts) + 1)
+    return all(per_wing.get(LEVELS[lv][0], 0) >= need for lv in layouts) and \
+        len(ks) >= total + SPARE_KEYS + need * len(layouts)
 
 
 def _apply_labyrinth(cat, romfs, layouts, jump_rows, logic_defs, item_defs, lab, cell_expr, cell_keys, kcs,
@@ -1338,30 +1323,24 @@ def _apply_labyrinth(cat, romfs, layouts, jump_rows, logic_defs, item_defs, lab,
     """apply()'s Labyrinth part: the one graph, cell conditions, the shared small keys, Eagle's Tower's way in,
     region nodes per wing. Returns info for the rest of apply()."""
     import copy
-    et_locks = lab['et_locks']
     starts = labyrinth_starts(lab['arrivals'])
-    edges, flags = labyrinth_graph(cat, romfs, layouts, jump_rows, et_locks)
-    kc, total = labyrinth_keys(edges, starts, flags, et_locks)
-    kothers = total - et_locks
+    edges, flags = labyrinth_graph(cat, romfs, layouts, jump_rows)
+    kc, total = labyrinth_keys(edges, starts, flags)
     shuffled = {LEVELS[lv][0] for lv in layouts}
 
-    def kfix(c, et_only=False):
-        """Vanilla small-key counts -> the shared key: Eagle's Tower's k-th key = every other lock + k (the worst case:
-        all the other keys spent before), a shuffled dungeon's = every key."""
+    def kfix(c):
+        """Vanilla small-key counts -> the shared key: a shuffled dungeon's = every key (the worst case)."""
         def sub(m):
-            d, k = int(m.group(1)), int(m.group(3) or 1)
-            if d == 7:
-                return f'key-D{SHARED_KEY_N}:{min(total, kothers + k)}'
-            if d in shuffled and not et_only:
-                return f'key-D{SHARED_KEY_N}:{total}'
-            return m.group(0)
+            return f'key-D{SHARED_KEY_N}:{total}' if int(m.group(1)) in shuffled else m.group(0)
         return re.sub(r'(?<![\w-])key-D(\d)(:(\d+))?', sub, c)
     for k, v in logic_defs.items():  # (vanilla conditions; the shuffled dungeons' checks and cells are rewritten later)
+        if v.get('type') in ('item', 'room'):
+            continue
         for key in ('condition-basic', 'condition-advanced', 'condition-glitched', 'condition-hell', 'condition-trick'):
             if v.get(key):
-                v[key] = kfix(v[key], et_only=v.get('type') in ('item', 'room'))
-    # Eagle's Tower: 'eagle-tower' was "at its door"; its door keeps that, the region becomes "inside it" (from its door
-    # or through its doorway out, linked to another wing)
+                v[key] = kfix(v[key])
+    # Eagle's Tower: 'eagle-tower' was "at its door"; its door keeps that, the region becomes "inside it" (its entrance,
+    # from its door or through its doorway out, linked to another wing)
     logic_defs['eagle-tower-door'] = copy.deepcopy(logic_defs['eagle-tower'])
     res = {}
     for node, (t, k) in keyed_terms(edges, starts, kc, total).items():
@@ -1402,4 +1381,4 @@ def _apply_labyrinth(cat, romfs, layouts, jump_rows, logic_defs, item_defs, lab,
             item_defs[f'key-D{i}']['quantity'] = 0
     item_defs[f'key-D{SHARED_KEY_N}']['quantity'] = total + SPARE_KEYS
     junk_delta[0] += total + SPARE_KEYS - old
-    return {'total': total, 'et_locks': et_locks, 'et_keys': cell_keys.get(ET_NODE, total), 'kfix': kfix, 'own': own}
+    return {'total': total, 'kfix': kfix, 'own': own}

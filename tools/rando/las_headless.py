@@ -407,15 +407,13 @@ def main():
                 import labyrinth
                 t_lab = _time.time()
                 try:
-                    layouts, jumps, lab_info = labyrinth.plan(cat, sub, romfs, room_mode, settings,
-                                                              et_locks=base[1]['key-D7']['quantity'])
+                    layouts, jumps, lab_info = labyrinth.plan(cat, sub, romfs, room_mode, settings)
                 except RuntimeError as e:
                     print('room layout:', e, '- planning another', flush=True)
                     continue
                 lab_info['plan-seconds'] = round(_time.time() - t_lab, 2)
                 logic_rows = jumps
-                lab = {'arrivals': {k: tuple(v[:2]) for k, v in lab_info['arrivals'].items()},
-                       'et_locks': base[1]['key-D7']['quantity']}
+                lab = {'arrivals': {k: tuple(v[:2]) for k, v in lab_info['arrivals'].items()}}
             else:
                 try:  # (Decoupled: Coupled with one-way doorways)
                     layouts, jumps = dungeon_gen.plan_all_chaos(cat, sub, romfs, madness=room_mode == 'decoupled',

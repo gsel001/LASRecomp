@@ -13,9 +13,10 @@ not a mode of its own - it interconnects the dungeons, each room shuffle mode ke
              the first piece of each wing always links to another wing), the rest within the wing, a share across.
              A doorway paired into another level is a level load (runtime: stage 2): its rows carry the target level
              (dungeon_gen.is_cross) and go to labyrinth_links.tsv, never door_jumps.tsv.
-  Eagle's    kept whole (its rooms, pillars and collapse stay as they are; it isn't rebuilt). Its doorway out (08B
-  Tower      south, to the overworld in the game) is one of the Labyrinth's free doorways: it leads into another wing,
-             and that wing's doorway leads back into Eagle's Tower at its entrance (ET_START).
+  Eagle's    a wing whose rooms are shuffled within it, as plain room shuffle does (collapsed, eagle_tower.py; its own
+  Tower      level file, stairs pairs: dungeon_gen.LINK_LEVELS), its doorways paired among themselves (chaos_pairs). Its
+             doorway out (08B south, to the overworld in the game) is its one link: it leads into another wing, and
+             that wing's doorway leads back into Eagle's Tower at its entrance (ET_START). No other door arrives in it.
   doors      every overworld dungeon door (but Eagle's Tower's) leads into some room of the Labyrinth (pick_arrivals: any
              wing, any room but boss / mini-boss arenas, the instrument rooms and cells behind boss doors), arriving at
              one of its doorways. A wing whose entrance room no door leads to is reachable only through another wing;
@@ -34,7 +35,7 @@ not a mode of its own - it interconnects the dungeons, each room shuffle mode ke
             Tower's way out's AreaLevelOpen retargeted, labyrinth_doors.tsv. Runtime: runtime/hle/doorjump.c (rows into
             another level load it), runtime/hle/labyrinth.c (shared keys, the door Link came in by).
 
-    plan(cat, seed, romfs, mode, settings, et_locks) -> (layouts, rows, info)
+    plan(cat, seed, romfs, mode, settings) -> (layouts, rows, info)
 """
 import json
 import os
@@ -223,6 +224,8 @@ def pick_arrivals(cat, layouts, rng, romfs):
     lr = json.load(open(os.path.join(HERE, 'location_rooms.json')))
     cand = []
     for lv in sorted(layouts):
+        if lv == ET:  # (its own door only: ET_START)
+            continue
         L = layouts[lv]
         inst = (lr.get(f'D{wing(lv)}-instrument') or {}).get('room')
         arena = set()
@@ -240,7 +243,7 @@ def pick_arrivals(cat, layouts, rng, romfs):
             if ways:
                 cand.append((lv, cell, room, ways))
     out, used = {}, set()
-    for lv in sorted(layouts):
+    for lv in sorted(lv for lv in layouts if lv != ET):
         region = rl.LEVELS[lv][1]
         pool = [c for c in cand if c[1] not in used]
         lv2, cell, room, ways = rng.choice(pool)
@@ -366,10 +369,11 @@ def write_doors(romfs, out, info, rows):
 
 
 # ---------------------------------------------------------------- the plan
-def plan(cat, seed, romfs, mode, settings=None, et_locks=0, rounds=None):
+def plan(cat, seed, romfs, mode, settings=None, rounds=None):
     """-> ({level: layout}, rows, info): the wings' layouts (dungeon_gen names: {'Lv01TailCave_08D': room}), every
     door_jumps row (rows into another level have 10 fields) and info (arrivals, links, statistics: labyrinth.json)."""
-    levels = [lv for lv in dg.ENTRANCES if lv != ET]  # (Eagle's Tower: kept whole, ET_STUB)
+    levels = list(dg.ENTRANCES)
+    wings = [lv for lv in levels if lv != ET]  # (Eagle's Tower: closed on itself, linked only by ET_STUB)
     if rounds is None:
         rounds = int(os.environ.get('LARECOMP_GEN_ROUNDS', 8))
     fixed = set()
@@ -384,15 +388,22 @@ def plan(cat, seed, romfs, mode, settings=None, et_locks=0, rounds=None):
         sub = seed if rnd == 0 else f'{seed}#{rnd}'
         rng = random.Random(sub + '-labyrinth')
         # (Coupled: every wing an even number of free doorway sides but one, whose odd one out pairs with Eagle's
-        # Tower's way out - no doorway ever leads back into itself)
+        # Tower's way out - no doorway ever leads back into itself; the tower pairs its own, an even number)
         placed = dg.chaos_place(cat, sub, romfs, levels, rng, pool, shuffle=rnd > 0, even=mode != 'decoupled',
-                                flip={rng.choice(sorted(levels))})
+                                flip={rng.choice(sorted(wings))})
         if placed is None:
             why['placement'] = why.get('placement', 0) + 1
             continue
         out = placed[0]
+        for _ in range(60):  # Eagle's Tower: its doorways among themselves, as plain room shuffle (one piece in the end)
+            et_rows = dg.chaos_pairs(cat, ET, out[ET], dg.ENTRANCES[ET], rng, romfs, madness=mode == 'decoupled')
+            if et_rows is not None:
+                break
+        if et_rows is None:
+            why['tower'] = why.get('tower', 0) + 1
+            continue
         pieces, follow = {}, {}
-        for lv in levels:
+        for lv in wings:
             comps, by_comp, fol = dg.chaos_pieces(cat, lv, out[lv], dg.ENTRANCES[lv], rng, romfs)
             if any(k not in by_comp for k in comps):  # (a piece without a free doorway: no way to link it)
                 pieces = None
@@ -406,7 +417,6 @@ def plan(cat, seed, romfs, mode, settings=None, et_locks=0, rounds=None):
         pieces[(ET, 'ET')] = [ET_STUB]
         short_layouts = {lv: {short(c): r for c, r in L.items()} for lv, L in out.items()}
         need = {(lv, c) for lv, L in short_layouts.items() for c, r in L.items() if any(dg.openings(cat, r).values())}
-        need.add(rl.ET_NODE)
         found = None
         def oneway(x, out=out):
             return x[0] is not None and (out[level_of(x)][x[1]], x[2], x[3]) in inward
@@ -425,8 +435,8 @@ def plan(cat, seed, romfs, mode, settings=None, et_locks=0, rounds=None):
             if link is None:
                 why['pairing'] = why.get('pairing', 0) + 1
                 continue
-            rows = with_followers(cat, out, romfs, follow, link)
-            edges, flags = rl.labyrinth_graph(cat, romfs, short_layouts, rows, et_locks)
+            rows = with_followers(cat, out, romfs, follow, link) + et_rows
+            edges, flags = rl.labyrinth_graph(cat, romfs, short_layouts, rows)
             for _ in range(8):  # (the doors' rooms: drawn again when a boss door would shut off more than its boss)
                 arrivals = pick_arrivals(cat, out, rng, romfs)
                 starts = rl.labyrinth_starts({k: v[:2] for k, v in arrivals.items()})
@@ -440,7 +450,7 @@ def plan(cat, seed, romfs, mode, settings=None, et_locks=0, rounds=None):
                     why['boss door'] = why.get('boss door', 0) + 1
                     continue
                 if not keysanity and not rl.labyrinth_fill_ok(cat, romfs, edges, starts, flags, short_layouts,
-                                                              settings, et_locks):
+                                                              settings):
                     why['fill'] = why.get('fill', 0) + 1
                     continue
                 found = (rows, arrivals, link, edges, starts)
@@ -472,7 +482,7 @@ def stats(cat, layouts, rows, arrivals, link, edges, starts, mode):
                     if mode != 'decoupled' else ((level_of(a), short(a[1]), a[2], a[3]), (level_of(b), short(b[1]), b[2], b[3]))
                     for a, b in link.items() if level_of(a) != level_of(b)})
     door_wings = {v[0] for v in arrivals.values()} | {ET}
-    only = sorted(wing(lv) for lv in list(layouts) + [ET] if lv not in door_wings)
+    only = sorted(wing(lv) for lv in layouts if lv not in door_wings)
     # wings some of whose rooms only another wing leads to (from its own doors' rooms, staying inside the wing)
     split = []
     for lv in layouts:
@@ -487,7 +497,7 @@ def stats(cat, layouts, rows, arrivals, link, edges, starts, mode):
                     todo.append(b)
         if own and cells - seen:
             split.append(wing(lv))
-    return {'mode': mode, 'wings': {str(wing(lv)): lv for lv in list(layouts) + [ET]},
+    return {'mode': mode, 'wings': {str(wing(lv)): lv for lv in layouts},
             'arrivals': {k: list(v) for k, v in sorted(arrivals.items())},
             'eagle-tower': {'exit': [ET, short(ET_CELL), 'S', 10], 'start': ET_START,
                             'exit-leads-to': list(next(((level_of(b), short(b[1]), b[2], b[3])
