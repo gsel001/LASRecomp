@@ -137,7 +137,7 @@ struct GenOpts {
     bool shellsanity = false; // every Secret Seashell spot is a check (tools/rando/seashell_spots.py); off: vanilla
     int room_shuffle = 0;     // dungeon-room-shuffle: 0 off / 2 coupled / 3 decoupled (1: retired Coherent; dungeon_gen.py)
     bool pet_rooster = false, pet_ghost = false;  // pets in the pool (tools/rando/pets.py)
-    bool pet_marin = false;   // Marin in the pool, the desert closed until she wakes the Walrus (open-desert off)
+    bool pet_marin = false;   // Marin in the pool, the desert closed until she wakes the Walrus (open-desert off); she stays after
     int shopsanity = 0;       // off / vanilla prices / random prices (tools/rando/shopsanity.py)
     int miniboss_freq = 0;    // miniboss-frequency: overworld mini-boss chance 1x / 2x / 3x / every enemy that fits (enemies.py)
     int enemy_mode = 0;       // enemy-mode: seeded (fixed in the seed) / random (re-rolled at every load: enemy_random.c)
@@ -859,7 +859,8 @@ static void rows_companions(void) {
                "The Ghost is an item. Once you find him, walk him to his grave for a check. He won't show up on his "
                "own after the Surf Harp.");
     opt_toggle("Marin", &g_opts.pet_marin, false,
-               "Marin is an item in the pool, and the desert is blocked without her.");
+               "Marin is an item in the pool, and the desert is blocked without her. She decides to stay with you after "
+               "waking the Walrus.");
     opt_toggle("Companions allowed in dungeons", &g_opts.pets_in_dungeons, false,
                "Companions follow Link into dungeons, and the logic counts on what they can do there, like the Flying "
                "Rooster standing in for Roc's Feather.");
