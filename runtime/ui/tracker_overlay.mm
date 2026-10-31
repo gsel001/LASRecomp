@@ -1326,7 +1326,7 @@ static int draw_list(ImDrawList *dl, ImFont *font, float ox, float oy, float u, 
         }
     }
     dl->PopClipRect();
-    if (rows.empty()) dl->AddText(font, fs_r, ImVec2(x, top + 8 * u), ink2, "Nothing in logic here right now.");
+    if (rows.empty()) dl->AddText(font, fs_r, ImVec2(x, top + 8 * u), ink2, L("Nothing in logic here right now."));
     dl->AddText(font, 16 * u, ImVec2(x, z.y - 36 * u), IM_COL32(0x4A, 0x30, 0x20, 255), v.foot);
     *close = (click && !in_panel) || rclick;
     return chosen;
