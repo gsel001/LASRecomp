@@ -84,6 +84,7 @@ typedef struct {
     CosColour fences, walls, houses;  // the overworld's wooden fences, cliff walls, houses (recolour_buildings.c)
     int enemy_colours;        // 0 Off, 1 Random per seed, 2 Random every load (runtime/nvn/recolour_enemies.c)
     int screen_filter;        // 0 Off, 1 Game Boy, 2 Game Boy Color, 3 Grayscale (runtime/nvn/screen_filter.h)
+    int weather;              // WEATHER_* (runtime/nvn/weather.h): rain / snow / storm / blizzard on the overworld, looks only
     // speedrun (Gameplay tab; runtime/hle/run_timer.c, runtime/livesplit.c)
     bool timer;            // the in-game run timer in the corner (game time: level loads don't count)
     int timer_pos;         // TIMER_POS_*: which bottom corner it sits in
@@ -96,8 +97,9 @@ typedef struct {
 } Settings;
 
 
-enum { N_ENEMY_COLOUR_MODES = 3, N_SCREEN_FILTERS = 4 };
+enum { N_ENEMY_COLOUR_MODES = 3, N_SCREEN_FILTERS = 4, N_WEATHERS = 6 };
 extern const char *const g_screen_filters[N_SCREEN_FILTERS];  // (the menu's names)
+extern const char *const g_weathers[N_WEATHERS];  // (the menu's names: Off, Rain, Snow, Storm, Blizzard, Random)
 extern const char *const g_enemy_colour_modes[N_ENEMY_COLOUR_MODES];  // (the menu's names)
 
 extern Settings g_settings;

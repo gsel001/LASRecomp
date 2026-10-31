@@ -166,6 +166,7 @@ struct GenOpts {
     // made before it hold 0 = the maze, as they were
     bool fast_egg = true;
     bool no_start_mambo = false;  // Manbo's Mambo not given at the start (before the split: with the Ocarina)
+    bool weather_cycle = false;  // weather-cycle: the overworld's weather changes on its own (runtime/nvn/weather_cycle.c)
 };
 static GenOpts g_opts;
 
@@ -217,9 +218,10 @@ static bool *opt_flags(GenOpts &o, int i) {  // the yes/no options, in ID order 
                  &o.pet_rooster, &o.pet_ghost, &o.pet_marin, &o.trendsanity, &o.boss_souls, &o.hookshot_any,
                  &o.digs, &o.miniboss_souls, &o.no_start_sword, &o.no_start_shield, &o.no_start_ocarina,
                  &o.tunic_upgrades, &o.shellsanity, &o.race, &o.random_cosmetics, &o.apples, &o.chest_looks,
-                 &o.retired_key_rings, &o.hints, &o.rocks, &o.fast_egg, &o.compass_differs, &o.no_start_mambo};
+                 &o.retired_key_rings, &o.hints, &o.rocks, &o.fast_egg, &o.compass_differs, &o.no_start_mambo,
+                 &o.weather_cycle};
                  // (order after random_cosmetics: apples, chest_looks, key rings (retired), hints, rocks, fast_egg,
-                 // compass_differs, no_start_mambo)
+                 // compass_differs, no_start_mambo, weather_cycle)
     return i < (int)(sizeof f / sizeof *f) ? f[i] : NULL;
 }
 
@@ -454,6 +456,7 @@ static void start_generation(void) {
     fprintf(f, " \"pots\": %s, \"no-buff-drops\": %s, \"bushes\": %s, \"digs\": %s,\n", g_opts.pots ? "true" : "false",
             g_opts.no_buffs ? "true" : "false", g_opts.bushes ? "true" : "false", g_opts.digs ? "true" : "false");
     if (g_opts.rocks) fprintf(f, " \"rocks\": true,\n");  // (off: not written, seeds as before)
+    if (g_opts.weather_cycle) fprintf(f, " \"weather-cycle\": true,\n");  // (likewise)
     fprintf(f, " \"tunic-upgrades\": %s, \"shellsanity\": %s, \"random-cosmetics\": %s,\n",
             g_opts.tunic_upgrades ? "true" : "false", g_opts.shellsanity ? "true" : "false",
             g_opts.random_cosmetics ? "true" : "false");
@@ -865,6 +868,8 @@ static void rows_companions(void) {
 }
 
 static void rows_fun(void) {
+    opt_toggle("Weather Cycle", &g_opts.weather_cycle, false,
+               "Adds a weather cycle, including storm and blizzard hazards.");
     opt_toggle("Randomize music", &g_opts.randomize_music, false, "Shuffles the game's music.");
     opt_toggle("Randomize Cosmetics", &g_opts.random_cosmetics, false, "Randomizes cosmetics to the seed.");
     opt_toggle("Randomized Game Environments", &g_opts.environments, false,

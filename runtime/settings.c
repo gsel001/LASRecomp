@@ -27,6 +27,8 @@ static const char *const k_enemy_colour_keys[N_ENEMY_COLOUR_MODES] = {"off", "se
 const char *const g_screen_filters[N_SCREEN_FILTERS] = {LN("Off"), LN("Game Boy"), LN("Game Boy Color"),
                                                         LN("Grayscale")};
 static const char *const k_screen_filter_keys[N_SCREEN_FILTERS] = {"off", "gameboy", "gameboy_color", "grayscale"};  // (else: off)
+const char *const g_weathers[N_WEATHERS] = {LN("Off"), LN("Rain"), LN("Snow"), LN("Storm"), LN("Blizzard"), LN("Random")};
+static const char *const k_weather_keys[N_WEATHERS] = {"off", "rain", "snow", "storm", "blizzard", "random"};  // (else: off)
 
 Settings g_settings = {
     .aspect = ASPECT_UNLOCKED,
@@ -278,6 +280,9 @@ void settings_load(void) {
         else if (!strcmp(key, "screen_filter")) {
             for (int i = 0; i < N_SCREEN_FILTERS; i++) if (!strcmp(val, k_screen_filter_keys[i])) g_settings.screen_filter = i;
         }
+        else if (!strcmp(key, "weather")) {
+            for (int i = 0; i < N_WEATHERS; i++) if (!strcmp(val, k_weather_keys[i])) g_settings.weather = i;
+        }
         else if (!strcmp(key, "enemy_colours")) {
             for (int i = 0; i < N_ENEMY_COLOUR_MODES; i++) if (!strcmp(val, k_enemy_colour_keys[i])) g_settings.enemy_colours = i;
         }
@@ -351,6 +356,7 @@ void settings_save(void) {
     }
     fprintf(f, "enemy_colours = %s\n", k_enemy_colour_keys[g_settings.enemy_colours]);
     fprintf(f, "screen_filter = %s\n", k_screen_filter_keys[g_settings.screen_filter]);
+    fprintf(f, "weather = %s\n", k_weather_keys[g_settings.weather]);
     bind_settings_save(f);
     fprintf(f, "rando_seed = %s\n", g_settings.rando_seed);
     if (g_settings.rando_options[0]) fprintf(f, "rando_options = %s\n", g_settings.rando_options);

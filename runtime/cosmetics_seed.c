@@ -1,9 +1,10 @@
 // The randomizer seed's own cosmetics (Randomizer tab "Random cosmetics", seed option "random-cosmetics"): a seed
 // made with it has its own set, picked from its seed (the same every time it's played): a fully random colour (any
 // hue, saturation and brightness) for each of the tunic, hearts, hair, skin, shield, leaves, grass, sand, water,
-// fences, walls and houses, and enemy colours "per seed" (the screen filter stays off: it isn't a colour). Only while
-// that seed is being played (never in vanilla), over whatever the player chose: the Cosmetics tab is locked meanwhile
-// (the player's own choices stay saved, and are back in another seed or vanilla).
+// fences, walls and houses, enemy colours "per seed" and a weather (clear, rain, snow or storm: runtime/nvn/weather.c;
+// the screen filter stays off: it isn't a colour). Only while that seed is being played (never in vanilla), over
+// whatever the player chose: the Cosmetics tab is locked meanwhile (the player's own choices stay saved, and are back
+// in another seed or vanilla).
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
@@ -16,6 +17,7 @@
 static char g_dir[300] = "\1";  // (the seed the picks were made for; seeds switch in place)
 static uint32_t g_rgb[COL_SLOTS];  // (0xRRGGBB, one per row)
 static bool g_on;
+static int g_weather;  // (0 clear, 1 rain, 2 snow, 3 storm)
 
 static uint32_t mix32(uint32_t h) {
     h ^= h >> 16; h *= 0x7FEB352Du; h ^= h >> 15; h *= 0x846CA68Bu; h ^= h >> 16;
@@ -35,6 +37,7 @@ static void refresh_locked(void) {
     if (!strcmp(dir ? dir : "", g_dir)) return;
     snprintf(g_dir, sizeof g_dir, "%s", dir ? dir : "");
     g_on = false;
+    g_weather = 0;
     memset(g_rgb, 0, sizeof g_rgb);
     char p[600];
     static char buf[1 << 16];
@@ -53,6 +56,7 @@ static void refresh_locked(void) {
     for (const char *s = name; s < end; s++) h = (h ^ (uint8_t)*s) * 16777619u;
     for (int slot = 0; slot < COL_SLOTS; slot++)
         g_rgb[slot] = mix32(h ^ (uint32_t)slot * 0x9E3779B1u) & 0xFFFFFF;
+    g_weather = (int)(mix32(h ^ 0x57EA7E12u) % 4);
     LOG("[cosmetics] seed's own cosmetics (%s)\n", dir);
 }
 
@@ -72,6 +76,15 @@ bool cosmetics_seed_on(void) {
     bool on = g_on;
     pthread_mutex_unlock(&g_lock);
     return on;
+}
+
+// The seed's own weather (0 clear, 1 rain, 2 snow, 3 storm), over the Weather row; 0 without one
+int cosmetics_seed_weather(void) {
+    pthread_mutex_lock(&g_lock);
+    refresh_locked();
+    int w = g_on ? g_weather : 0;
+    pthread_mutex_unlock(&g_lock);
+    return w;
 }
 
 __attribute__((constructor)) static void install(void) { g_col_seed_pick = seed_pick; }
