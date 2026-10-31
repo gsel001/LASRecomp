@@ -27,6 +27,8 @@ static const char *const k_enemy_colour_keys[N_ENEMY_COLOUR_MODES] = {"off", "se
 const char *const g_screen_filters[N_SCREEN_FILTERS] = {LN("Off"), LN("Game Boy"), LN("Game Boy Color"),
                                                         LN("Grayscale")};
 static const char *const k_screen_filter_keys[N_SCREEN_FILTERS] = {"off", "gameboy", "gameboy_color", "grayscale"};  // (else: off)
+const char *const g_weathers[N_WEATHERS] = {LN("Off"), LN("Rain"), LN("Snow"), LN("Storm"), LN("Blizzard"), LN("Random")};
+static const char *const k_weather_keys[N_WEATHERS] = {"off", "rain", "snow", "storm", "blizzard", "random"};  // (else: off)
 
 Settings g_settings = {
     .aspect = ASPECT_UNLOCKED,
@@ -59,13 +61,15 @@ Settings g_settings = {
 // regionJP/JPja, regionKR/KRkr, regionTW/TWch, regionCN/CNch), and the game picks one from the system language it
 // reads back (runtime/services/am.c), exactly as it does on the console. Codes as the Switch reports them, except for
 // the Chinese ones: the game only recognizes zh-Hans / zh-Hant and falls back to Japanese when told zh-CN / zh-TW.
+// Then the menus' own (N_GAME_LANGUAGES on): the game has no text in them, its text stays English.
 const char *const g_language_codes[N_LANGUAGES] = {"auto", "ja", "en-US", "es", "fr", "de", "it", "nl", "ru", "ko",
-                                                   "zh-Hans", "zh-Hant"};
+                                                   "zh-Hans", "zh-Hant", "pt-BR"};
 const char *const g_language_names[N_LANGUAGES] = {"Auto", "Japanese", "English", "Spanish", "French", "German",
                                                    "Italian", "Dutch", "Russian", "Korean", "Chinese (Simplified)",
-                                                   "Chinese (Traditional)"};
+                                                   "Chinese (Traditional)", "Portuguese (Brazil)"};
 const char *const g_language_endonyms[N_LANGUAGES] = {"Auto", "日本語", "English", "Español", "Français", "Deutsch",
-                                                      "Italiano", "Nederlands", "Русский", "한국어", "简体中文", "繁體中文"};
+                                                      "Italiano", "Nederlands", "Русский", "한국어", "简体中文", "繁體中文",
+                                                      "Português (Brasil)"};
 
 // A locale name ("es_ES.UTF-8", "zh-Hans-CN", "ja-JP", "zh_TW") -> one of the game's codes, NULL for none of its
 // languages.
@@ -91,13 +95,13 @@ static const char *match_locale(const char *e) {
     for (const char *p = e; *p && !strchr(".@_-", *p) && n < sizeof l - 1; p++) l[n++] = (char)tolower((unsigned char)*p);
     static const struct { const char *loc, *code; } map[] = {{"ja", "ja"}, {"ko", "ko"}, {"ru", "ru"}, {"nl", "nl"},
                                                              {"de", "de"}, {"it", "it"}, {"fr", "fr"}, {"es", "es"},
-                                                             {"en", "en-US"}};
+                                                             {"en", "en-US"}, {"pt", "pt-BR"}};
     for (size_t i = 0; i < sizeof map / sizeof *map; i++)
         if (!strcmp(l, map[i].loc)) return map[i].code;
     return NULL;
 }
 
-// LANG_AUTO: the host's own language, en-US when it is none of the game's. Linux: the locale variables
+// LANG_AUTO: the host's own language, en-US when it is none of the menus'. Linux: the locale variables
 // (LANG=es_ES.UTF-8 -> es); macOS / Windows: the first of the user's preferred languages that the game has (apps get
 // no locale variables there).
 static const char *host_language(void) {
@@ -132,13 +136,20 @@ static const char *host_language(void) {
     return lang;
 }
 
-const char *settings_language(void) {
+const char *settings_menu_language(void) {
     int i = g_settings.language;
     return i > LANG_AUTO && i < N_LANGUAGES ? g_language_codes[i] : host_language();
 }
 
+const char *settings_language(void) {
+    const char *c = settings_menu_language();
+    for (int i = N_GAME_LANGUAGES; i < N_LANGUAGES; i++)
+        if (!strcmp(c, g_language_codes[i])) return "en-US";  // (the menus' only)
+    return c;
+}
+
 const char *settings_language_name(void) {
-    const char *c = settings_language();
+    const char *c = settings_menu_language();
     for (int i = 0; i < N_LANGUAGES; i++)
         if (!strcmp(c, g_language_codes[i])) return g_language_names[i];
     return "English";
@@ -269,6 +280,9 @@ void settings_load(void) {
         else if (!strcmp(key, "screen_filter")) {
             for (int i = 0; i < N_SCREEN_FILTERS; i++) if (!strcmp(val, k_screen_filter_keys[i])) g_settings.screen_filter = i;
         }
+        else if (!strcmp(key, "weather")) {
+            for (int i = 0; i < N_WEATHERS; i++) if (!strcmp(val, k_weather_keys[i])) g_settings.weather = i;
+        }
         else if (!strcmp(key, "enemy_colours")) {
             for (int i = 0; i < N_ENEMY_COLOUR_MODES; i++) if (!strcmp(val, k_enemy_colour_keys[i])) g_settings.enemy_colours = i;
         }
@@ -342,6 +356,7 @@ void settings_save(void) {
     }
     fprintf(f, "enemy_colours = %s\n", k_enemy_colour_keys[g_settings.enemy_colours]);
     fprintf(f, "screen_filter = %s\n", k_screen_filter_keys[g_settings.screen_filter]);
+    fprintf(f, "weather = %s\n", k_weather_keys[g_settings.weather]);
     bind_settings_save(f);
     fprintf(f, "rando_seed = %s\n", g_settings.rando_seed);
     if (g_settings.rando_options[0]) fprintf(f, "rando_options = %s\n", g_settings.rando_options);

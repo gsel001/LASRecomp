@@ -826,6 +826,7 @@ def main():
         s['dungeon-entrances'] = dict(result['placements'].get('dungeon-entrances') or {})
         s['hint-sheet'] = True  # (runtime/hle/hint_sheet.c: older seeds have no Hint Sheet)
         s['ghost-item'] = 'ghost' in pets  # (runtime/hle/pets.c: older seeds' Ghost follows Link)
+        s['marin-stays'] = 'marin-companion' in pets  # (pets.py; runtime/hle/pets.c: older seeds' Marin leaves)
         s['underwater-items'] = True  # (runtime: the sunken heart-piece actors don't hide for an owned heart piece)
         s['silent-pickups'] = True  # (tools/rando/silent_pickups.py; runtime/hle/silent_pickups.c)
         shells = sum(1 for v in result['placements'].values() if v == 'seashell')  # (the fly-in's "n / total": 50)
@@ -840,7 +841,7 @@ def main():
     if settings.get('tunic-color', 'default') != 'default':
         import cosmetics
         print('tunic:', cosmetics.apply(out_dir, romfs, settings['seed'], settings['tunic-color']), flush=True)
-    print('tracker:', tracker.build(out_dir, romfs), flush=True)
+    print('tracker:', tracker.build(out_dir, romfs, result['placements']), flush=True)
     import spoiler_view  # readable spoiler + walkthrough for the in-game Spoiler page
     # the spoiler is named after the seed string (the seed ID): a fixed name survives renaming the seed's folder
     sp = os.path.join(out_dir, f"spoiler_{settings['seed']}.txt")

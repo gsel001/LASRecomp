@@ -42,6 +42,14 @@ static _Atomic uint64_t rumble_frame_ms;
 static uint16_t rumble_last_lo, rumble_last_hi;
 static uint64_t rumble_last_ms;
 static bool rumble_warned;
+static _Atomic uint64_t rumble_pulse_until;  // a pulse of our own (input_rumble_pulse): until then, at least this
+static _Atomic uint32_t rumble_pulse_amp;    // (lo << 16 | hi)
+// A short rumble of our own (the Storm weather's thunder, runtime/nvn/weather.c): mixed in like the game's, with the
+// same rules (Rumble setting, its intensity, the menu, focus). Any thread.
+void input_rumble_pulse(uint16_t lo, uint16_t hi, uint32_t ms) {
+    atomic_store(&rumble_pulse_amp, (uint32_t)lo << 16 | hi);
+    atomic_store(&rumble_pulse_until, SDL_GetTicks() + ms);
+}
 
 static void rumble_clear(void) {
     SDL_LockSpinlock(&rumble_lock);
@@ -89,6 +97,11 @@ void input_rumble_poll(void) {
     if (suppress) memset(rumble_values, 0, sizeof rumble_values);
     else if (rumble_allowed) {
         rumble_mix(rumble_values, &lo, &hi);
+        if (now < atomic_load(&rumble_pulse_until)) {
+            uint32_t p = atomic_load(&rumble_pulse_amp);
+            if ((p >> 16) > lo) lo = (uint16_t)(p >> 16);
+            if ((p & 0xFFFF) > hi) hi = (uint16_t)(p & 0xFFFF);
+        }
         int pct = g_settings.rumble_strength;  // (Controls tab: Intensity)
         if (pct > 0 && pct < 100) lo = (uint16_t)(lo * pct / 100), hi = (uint16_t)(hi * pct / 100);
     }

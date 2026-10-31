@@ -138,7 +138,7 @@ struct GenOpts {
     int room_shuffle = 0;     // dungeon-room-shuffle: 0 off / 2 coupled / 3 decoupled (1: retired Coherent; dungeon_gen.py)
     bool labyrinth = false;   // dungeon-labyrinth: with room shuffle, every dungeon a wing of one (tools/rando/labyrinth.py)
     bool pet_rooster = false, pet_ghost = false;  // pets in the pool (tools/rando/pets.py)
-    bool pet_marin = false;   // Marin in the pool, the desert closed until she wakes the Walrus (open-desert off)
+    bool pet_marin = false;   // Marin in the pool, the desert closed until she wakes the Walrus (open-desert off); she stays after
     int shopsanity = 0;       // off / vanilla prices / random prices (tools/rando/shopsanity.py)
     int miniboss_freq = 0;    // miniboss-frequency: overworld mini-boss chance 1x / 2x / 3x / every enemy that fits (enemies.py)
     int enemy_mode = 0;       // enemy-mode: seeded (fixed in the seed) / random (re-rolled at every load: enemy_random.c)
@@ -167,6 +167,7 @@ struct GenOpts {
     // made before it hold 0 = the maze, as they were
     bool fast_egg = true;
     bool no_start_mambo = false;  // Manbo's Mambo not given at the start (before the split: with the Ocarina)
+    bool weather_cycle = false;  // weather-cycle: the overworld's weather changes on its own (runtime/nvn/weather_cycle.c)
 };
 static GenOpts g_opts;
 
@@ -219,9 +220,9 @@ static bool *opt_flags(GenOpts &o, int i) {  // the yes/no options, in ID order 
                  &o.digs, &o.miniboss_souls, &o.no_start_sword, &o.no_start_shield, &o.no_start_ocarina,
                  &o.tunic_upgrades, &o.shellsanity, &o.race, &o.random_cosmetics, &o.apples, &o.chest_looks,
                  &o.retired_key_rings, &o.hints, &o.rocks, &o.fast_egg, &o.compass_differs, &o.no_start_mambo,
-                 &o.labyrinth};
+                 &o.weather_cycle, &o.labyrinth};
                  // (order after random_cosmetics: apples, chest_looks, key rings (retired), hints, rocks, fast_egg,
-                 // compass_differs, no_start_mambo, labyrinth)
+                 // compass_differs, no_start_mambo, weather_cycle, labyrinth)
     return i < (int)(sizeof f / sizeof *f) ? f[i] : NULL;
 }
 
@@ -457,6 +458,7 @@ static void start_generation(void) {
     fprintf(f, " \"pots\": %s, \"no-buff-drops\": %s, \"bushes\": %s, \"digs\": %s,\n", g_opts.pots ? "true" : "false",
             g_opts.no_buffs ? "true" : "false", g_opts.bushes ? "true" : "false", g_opts.digs ? "true" : "false");
     if (g_opts.rocks) fprintf(f, " \"rocks\": true,\n");  // (off: not written, seeds as before)
+    if (g_opts.weather_cycle) fprintf(f, " \"weather-cycle\": true,\n");  // (likewise)
     fprintf(f, " \"tunic-upgrades\": %s, \"shellsanity\": %s, \"random-cosmetics\": %s,\n",
             g_opts.tunic_upgrades ? "true" : "false", g_opts.shellsanity ? "true" : "false",
             g_opts.random_cosmetics ? "true" : "false");
@@ -655,8 +657,8 @@ static void rows_general(void) {
     opt_toggle("Disable Guardian Acorns / Pieces of Power", &g_opts.no_buffs, false,
                "Disables Guardian Acorns and Pieces of Power from spawning.");
     opt_own_next();  // (the player's own, not part of a seed)
-    if (opt_toggle("Check tracker on overworld map", &g_settings.tracker, true,
-                   "The overworld map marks the checks you have and haven't done yet."))
+    if (opt_toggle("Overworld and Dungeon Check Tracker", &g_settings.tracker, true,
+                   "The overworld and dungeon maps show which checks you can reach with your items."))
         settings_save();
     opt_toggle("Fast Egg", &g_opts.fast_egg, true, "First drop in the Wind Fish Egg drops you to the boss.");
 }
@@ -724,15 +726,13 @@ static void rows_extra_checks(void) {
     opt_toggle("Bushsanity", &g_opts.bushes, false,
                "Every bush on the island hides an item, about 310 more checks. Bushes you haven't cut yet are golden.");
     opt_toggle("Digsanity", &g_opts.digs, false,
-               "Every diggable tile on the overworld is a check, about 5,000 more, and most important items end up "
-               "buried. Cut grass and bushes before you dig. Holes stay dug, so you can see where you've been.");
+               "Every diggable tile on the overworld is a check, about 5,000 more. Holes stay dug.");
     opt_toggle("Shellsanity", &g_opts.shellsanity, false, "Every hidden Secret Seashell spot holds an item from the pool.");
     opt_toggle("Applesanity", &g_opts.apples, false, "Each apple tree holds 3 items from the pool.");
     opt_toggle("Rocksanity", &g_opts.rocks, false, "Every rock you can lift on the overworld hides an item from the pool.");
     static const char *ksn[] = {LN("Off"), LN("Small Keys"), LN("Small + Nightmare"), LN("All dungeon items")};
     opt_choice("Keysanity", &g_opts.keysanity, ksn, 4, 0,
-               "Dungeon keys can turn up anywhere in the world. The last choice does the same for every dungeon item. "
-               "Keys only open doors in their own dungeon, and the Items screen shows how many you have for each.");
+               "Dungeon keys can be anywhere. The last choice does this for every dungeon item.");
     opt_toggle("Potsanity", &g_opts.pots, false,
                "Every pot you can lift in houses, caves and dungeons hides an item, about 400 more checks. Pots you "
                "haven't checked yet are golden.");
@@ -872,13 +872,16 @@ static void rows_companions(void) {
                "The Ghost is an item. Once you find him, walk him to his grave for a check. He won't show up on his "
                "own after the Surf Harp.");
     opt_toggle("Marin", &g_opts.pet_marin, false,
-               "Marin is an item in the pool, and the desert is blocked without her.");
+               "Marin is an item in the pool, and the desert is blocked without her. She decides to stay with you after "
+               "waking the Walrus.");
     opt_toggle("Companions allowed in dungeons", &g_opts.pets_in_dungeons, false,
                "Companions follow Link into dungeons, and the logic counts on what they can do there, like the Flying "
                "Rooster standing in for Roc's Feather.");
 }
 
 static void rows_fun(void) {
+    opt_toggle("Weather Cycle", &g_opts.weather_cycle, false,
+               "Adds a weather cycle, including storm and blizzard hazards.");
     opt_toggle("Randomize music", &g_opts.randomize_music, false, "Shuffles the game's music.");
     opt_toggle("Randomize Cosmetics", &g_opts.random_cosmetics, false, "Randomizes cosmetics to the seed.");
     opt_toggle("Randomized Game Environments", &g_opts.environments, false,

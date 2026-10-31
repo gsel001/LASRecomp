@@ -22,7 +22,8 @@ enum { CHAOS_LETTERS_OFF = 0, CHAOS_LETTERS_EXPLORED = 1, CHAOS_LETTERS_MAP = 2 
 // the game picks its text language from it, as it would from the Switch's own system setting, and the menus follow it
 // too (runtime/ui/i18n.mm). LANG_AUTO follows the host's language (macOS / Windows: the user's preferred languages;
 // Linux: $LC_ALL / $LC_MESSAGES / $LANG); the rest are the codes of the languages the game has text for.
-enum { LANG_AUTO = 0, N_LANGUAGES = 12 };
+// The ones from N_GAME_LANGUAGES on are the menus' only (pt-BR): the game has no text for them and is told en-US.
+enum { LANG_AUTO = 0, N_GAME_LANGUAGES = 12, N_LANGUAGES = 13 };
 extern const char *const g_language_codes[N_LANGUAGES];  // what the game is told: "ja", "en-US", "es", ...
 extern const char *const g_language_names[N_LANGUAGES];  // ("Auto", "Japanese", ..., "Spanish")
 extern const char *const g_language_endonyms[N_LANGUAGES];  // each in its own language, for the menu ("日本語", "Deutsch")
@@ -83,6 +84,7 @@ typedef struct {
     CosColour fences, walls, houses;  // the overworld's wooden fences, cliff walls, houses (recolour_buildings.c)
     int enemy_colours;        // 0 Off, 1 Random per seed, 2 Random every load (runtime/nvn/recolour_enemies.c)
     int screen_filter;        // 0 Off, 1 Game Boy, 2 Game Boy Color, 3 Grayscale (runtime/nvn/screen_filter.h)
+    int weather;              // WEATHER_* (runtime/nvn/weather.h): rain / snow / storm / blizzard on the overworld, looks only
     // speedrun (Gameplay tab; runtime/hle/run_timer.c, runtime/livesplit.c)
     bool timer;            // the in-game run timer in the corner (game time: level loads don't count)
     int timer_pos;         // TIMER_POS_*: which bottom corner it sits in
@@ -95,8 +97,9 @@ typedef struct {
 } Settings;
 
 
-enum { N_ENEMY_COLOUR_MODES = 3, N_SCREEN_FILTERS = 4 };
+enum { N_ENEMY_COLOUR_MODES = 3, N_SCREEN_FILTERS = 4, N_WEATHERS = 6 };
 extern const char *const g_screen_filters[N_SCREEN_FILTERS];  // (the menu's names)
+extern const char *const g_weathers[N_WEATHERS];  // (the menu's names: Off, Rain, Snow, Storm, Blizzard, Random)
 extern const char *const g_enemy_colour_modes[N_ENEMY_COLOUR_MODES];  // (the menu's names)
 
 extern Settings g_settings;
@@ -114,7 +117,10 @@ extern int g_default_res_mode;  // RES_*: likewise
 // An integrated GPU (as settings_resolve_defaults was told): the fixed 1x renders 1280x720 there, what the game itself
 // picked on such a GPU (runtime/nvn/output_scale.c)
 extern bool g_gpu_integrated;
-// The language code to serve the game ("es", "en-US", ...): the setting, or the host locale for LANG_AUTO
+// The language code to serve the game ("es", "en-US", ...): the setting, or the host locale for LANG_AUTO (en-US for a
+// language of the menus only)
 const char *settings_language(void);
+// The menus' language code: the setting's, or the host locale's (pt-BR too, which the game itself doesn't have)
+const char *settings_menu_language(void);
 // That code's name for the menu ("Spanish")
 const char *settings_language_name(void);

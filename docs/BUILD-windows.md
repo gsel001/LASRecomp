@@ -1,4 +1,4 @@
-# Building LAS Recomp on Windows (x86-64)
+# Building LAS Recomp on Windows (x86-64, and ARM64 experimental)
 
 Status: part of main. Builds and runs the game on Vulkan (with your own game files); `make dist` packages the
 release zip.
@@ -36,11 +36,29 @@ The zip's `LAS Recomp/` folder holds `lasrecomp.exe` (icon from `docs/icon/icon.
 the folder must be writable (the app says so and quits if it isn't, e.g. under Program Files). A source checkout
 with `extracted/` in the starting folder keeps using that folder instead.
 
+## Windows on ARM (experimental)
+Builds natively on ARM64 Windows. The same `tools\setup_windows.ps1` sees ARM64 and sets up MSYS2 CLANGARM64
+instead of UCRT64, plus an x64 Python 3.12 in `%LOCALAPPDATA%\Programs\Python\Python312-x64` (unicorn and
+capstone have no ARM64 Windows wheels, so the Python tools run under Windows' x64 emulation).
+
+Build from an MSYS2 CLANGARM64 shell, or with `/c/msys64/clangarm64/bin` first on PATH. The steps are the same as
+above, except that the helpers need that Python passed in (there is no `py` launcher):
+
+    PY64=/c/Users/<you>/AppData/Local/Programs/Python/Python312-x64/python.exe
+    make rando-helper RANDO_PY="$PY64"
+    make gen-helper RANDO_PY="$PY64"
+    tools/fetch_zig.sh  # (zig for aarch64-windows)
+    make dist           # -> build/dist/LAS Recomp-<version>-windows-arm64.zip
+
+Everything in the zip is ARM64 except the two helpers (`lasgen`, `rando-gen`), which are x64. AArch64 FP/SIMD
+instructions stay inline assembly (`--simd asm`), as on the Mac. The ARM64 zip is not part of the normal releases.
+It is built by `.github/workflows/experimental.yml` for the Experimental builds page.
+
 ## Differences from macOS
 - Guest window 0x70_0000_0000..0x73_2000_0000 is reserved with VirtualAlloc and committed per region
   (kernel regions, modules, HLE heap); stray first touches are committed by a vectored exception handler.
 - AArch64 FP/SIMD instructions are lowered to C (`gen.py --simd=c`, the default on non-arm64 hosts) instead of
-  inline-asm passthrough.
+  inline-asm passthrough (Windows on ARM keeps the inline asm).
 - Renderer: Vulkan (runtime/nvn/vulkan) instead of Metal; shaders are translated to GLSL and compiled with
   shaderc. macOS keeps Metal.
 - Seed switches and "Title screen" reboot the game in place on both (runtime/main.c); the only re-exec left is

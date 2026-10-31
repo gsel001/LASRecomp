@@ -565,6 +565,7 @@ static void tab_display(void) {
 }
 
 extern "C" bool cosmetics_seed_on(void);  // runtime/cosmetics_seed.c
+extern "C" bool weather_cycle_on(void);   // runtime/nvn/weather_cycle.c
 
 // Cosmetics: tunic / heart colours, live (runtime/nvn/texpatch.c), and recolours by draw (runtime/nvn/recolour*.c);
 // a seed made with "Random cosmetics" has its own, and the page is locked while it's played (rows greyed out, showing
@@ -585,6 +586,7 @@ static void tab_cosmetics(void) {
             for (CosColour *c : rows) c->pick = COL_DEFAULT;
             g_settings.enemy_colours = 0;
             g_settings.screen_filter = 0;
+            g_settings.weather = 0;
         }
     }
     opt_section("Colors");
@@ -636,6 +638,17 @@ static void tab_cosmetics(void) {
         opt_choice("Screen filter", seed ? &shown : &g_settings.screen_filter, g_screen_filters, N_SCREEN_FILTERS, 0,
                    "Puts a filter over the whole screen, HUD included.");
     }
+#ifdef __APPLE__  // (the Metal renderer draws it; Vulkan: not yet - the setting does nothing there)
+    {   // (a seed with its own cosmetics, or the seed's weather cycle: "Seed", the seed's weather - locked)
+        const char *names[N_WEATHERS];
+        for (int i = 0; i < N_WEATHERS; i++) names[i] = g_weathers[i];
+        bool cycle = weather_cycle_on();
+        int shown = 0;
+        if (seed || cycle) names[0] = LN("Seed"), opt_disable_next();
+        opt_choice("Weather", seed || cycle ? &shown : &g_settings.weather, names, N_WEATHERS, 0,
+                   cycle ? "This seed picked the weather. Commit to it!" : "Rain, snow, a storm or a blizzard on the overworld.");
+    }
+#endif
     opt_end();
 }
 

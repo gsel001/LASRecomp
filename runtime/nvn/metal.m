@@ -19,6 +19,7 @@
 #include "renderer.h"
 #include "pace.h"
 #include "texpatch.h"
+#include "recolour.h"
 #include "tex_hash.h"
 #include "screen_filter.h"
 
