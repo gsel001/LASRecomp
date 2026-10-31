@@ -305,7 +305,7 @@ void warp_game_tick(Cpu *c) {
 }
 
 // ---- give item (game thread): main+0x7e18b0 = AddItem(itemId, count, index, autoEquip), the call behind the
-// Inventory.AddItemByKey event action (itemId = row of datasheets/Items.gsheet, e.g. 78 PanelDungeonPiece).
+// Inventory.AddItemByKey event action (itemId = the itemID field of datasheets/Items.gsheet, not the row: e.g. 114 PanelDungeonPiece, row 78).
 
 static int g_give_id, g_give_count, g_give_index;
 
@@ -742,6 +742,7 @@ void give_item_tick(Cpu *c, uint64_t frame) {
     { extern void triforce_tick(void); triforce_tick(); }  // (Triforce hunt: the get message's flags, triforce.c)
     { extern void hookshot_tour_tick(uint64_t frame); hookshot_tour_tick(frame); }
     { extern void flags_ext_tick(void); flags_ext_tick(); }  // (game thread: flag gets / sets happen here too)
+    { extern void enemy_stairs_tick(void); enemy_stairs_tick(); }  // (after it: Armos stairs flags, enemy_random.c)
     { extern void rt_powder_flag_tick(void); rt_powder_flag_tick(); }  // (found powder: keysanity.c)
     { extern void silent_pickups_tick(uint64_t); silent_pickups_tick(frame); }  // (a silent Heart Container's refill)
     ptrscan_tick(frame);

@@ -1,6 +1,7 @@
 from PySide6 import QtCore
 from .Paths.randomizer_paths import IS_RUNNING_FROM_SOURCE
 import RandomizerCore.spoiler as spoiler
+from RandomizerCore.Randomizers.data import start_dungeon_items as start_dungeon_item_kinds
 import re
 import copy
 import random
@@ -141,15 +142,8 @@ class ItemShuffler(QtCore.QThread):
                 self.vanilla_locations.add(inst)
         
         # if start with compass & map setting is enabled, adding them into the starting item setting
-        dungeon_item_setting = self.settings['dungeon-items']
-        if dungeon_item_setting != 'none':
-            to_check = ()
-            if dungeon_item_setting == 'mc':
-                to_check = ('map', 'compass')
-            elif dungeon_item_setting == 'mcb':
-                to_check = ('map', 'compass', 'stone-beak')
-            elif dungeon_item_setting == 'stone-beak':
-                to_check = 'stone-beak'
+        to_check = start_dungeon_item_kinds(self.settings)
+        if to_check:
 
             start_dungeon_items = [s for s in self.item_defs if s.startswith(to_check)]
             for e, item in enumerate(start_dungeon_items):
@@ -409,6 +403,37 @@ class ItemShuffler(QtCore.QThread):
         # If we get stuck and can't find any more locations to add, then we're stuck and can't reach toReach
         return False
     
+
+    FILL_STUCK = 150  # LAS Recomp: undos before a room-shuffle fill gives up (see makeRandomizedPlacement)
+
+    def _reachable(self, placements, starting_access, logic):
+        """LAS Recomp: everything canReachLocation could reach from these items (its search, run to the end)."""
+        if logic == 'none':
+            return set(self.logic_defs)
+        access = starting_access.copy()
+        access_added = True
+        while access_added and self.thread_active:
+            access_added = False
+            for key in self.logic_defs:
+                if key not in access:
+                    if self.checkAccess(key, access, logic):
+                        access = self.addAccess(access, key)
+                        access_added = True
+                        if (self.logic_defs[key]['type'] in ['item', 'follower']) and placements[key] != None:
+                            access = self.addAccess(access, placements[key])
+                        if self.logic_defs[key]['type'] == 'enemy':
+                            access = self.addAccess(access, key+'[pit]')
+                            access = self.addAccess(access, key+'[heavy]')
+                    elif self.logic_defs[key]['type'] == 'enemy':
+                        if 'condition-pit' in self.logic_defs[key] and not self.hasAccess(access, key+'[pit]'):
+                            if self.checkAccess(key+'[pit]', access, logic):
+                                access = self.addAccess(access, key+'[pit]')
+                                access_added = True
+                        if 'condition-heavy' in self.logic_defs[key] and not self.hasAccess(access, key+'[heavy]'):
+                            if self.checkAccess(key+'[heavy]', access, logic):
+                                access = self.addAccess(access, key+'[heavy]')
+                                access_added = True
+        return set(access)
 
     # LAS Recomp item pacing. Seeds with many early checks (bushes, pots, digs, Shellsanity) used to hand out most
     # progress items in the first spheres: Mabe Village opened up the whole game. Now each one tries the locations in
@@ -837,15 +862,8 @@ class ItemShuffler(QtCore.QThread):
 
             # if settings['dungeon-items'] == 'keys':
             #     item_pool = [s for s in item_pool if s.startswith(('map', 'compass', 'stone'))]
-            dungeon_item_setting = self.settings['dungeon-items']
-            if dungeon_item_setting != 'none':
-                to_check = ()
-                if dungeon_item_setting == 'mc':
-                    to_check = ('map', 'compass')
-                elif dungeon_item_setting == 'mcb':
-                    to_check = ('map', 'compass', 'stone-beak')
-                elif dungeon_item_setting == 'stone-beak':
-                    to_check = 'stone-beak'
+            to_check = start_dungeon_item_kinds(self.settings)
+            if to_check:
                 item_pool = [s for s in items if len(s) >= 2 and s[-2:] == f'D{i}' and not s.startswith(to_check)]
             else:
                 item_pool = [s for s in items if len(s) >= 2 and s[-2:] == f'D{i}']
@@ -1039,6 +1057,7 @@ class ItemShuffler(QtCore.QThread):
 
         # Do a very similar process for all other items
         self._pace_first(items, placements, access)
+        stuck = 0  # LAS Recomp: items that found no place so far (see the undo below)
         paced = False
         while items and self.thread_active:
             item = items[0]
@@ -1052,6 +1071,7 @@ class ItemShuffler(QtCore.QThread):
                 random.shuffle(locations)
                 paced = False
             first_location_tried = locations[0]
+            reach = None  # LAS Recomp: every location reachable without this item, worked out once (_reachable)
             
             # Until we make a valid placement for this item
             valid_placement = False
@@ -1075,13 +1095,20 @@ class ItemShuffler(QtCore.QThread):
                       locations[0] in self.settings.get('junk-locations', ())) and \
                         self.item_defs[item]['type'] != 'junk':
                     valid_placement = False
-                elif self.item_defs[item]['type'] in ('important', 'trade', 'seashell'):
+                elif self.item_defs[item]['type'] in ('important', 'trade', 'seashell') or (
+                        self.item_defs[item]['type'] == 'triforce' and
+                        sum(1 for l in placement_tracker if placements[l] == item) < tri_needed):
                     # Check if it's reachable. We only need to do this check for important items!
-                    valid_placement = self.canReachLocation(locations[0], placements, access, self.logic)
-                elif self.item_defs[item]['type'] == 'triforce' and \
-                        sum(1 for l in placement_tracker if placements[l] == item) < tri_needed:
-                    # LAS Recomp Triforce hunt: the needed pieces must be reachable, the extras can be anywhere
-                    valid_placement = self.canReachLocation(locations[0], placements, access, self.logic)
+                    # (LAS Recomp Triforce hunt: the needed pieces must be reachable, the extras can be anywhere)
+                    # LAS Recomp: one search for every location instead of one per location tried - the same answer
+                    # (a location is reachable when the closure from these items holds it; the item tried there
+                    # only counts once it is reached), but a placement that fails everywhere took a full search per
+                    # location (5600+ with digs: minutes per item; seeds without a starting sword timed out)
+                    if reach is None:
+                        placements[locations[0]] = None
+                        reach = self._reachable(placements, access, self.logic)
+                        placements[locations[0]] = item
+                    valid_placement = locations[0] not in placements['force-junk'] and locations[0] in reach
                 else:
                     valid_placement = True
                 
@@ -1092,6 +1119,13 @@ class ItemShuffler(QtCore.QThread):
                     locations.append(locations.pop(0))
                     if locations[0] == first_location_tried: 
                         # If we tried every location and none work, undo the previous placement and try putting it somewhere else
+                        # LAS Recomp dungeon room shuffle: a layout whose first spheres hold too few locations (no
+                        # starting sword: shutters, entrances shuffled) can't be filled at all - the undos went on
+                        # forever (seed N2HB8-...: the 5th golden leaf, 4 locations before Kanalet). After this many
+                        # the caller plans the next layout (tools/rando/las_headless.py, FILL_STUCK)
+                        stuck += 1
+                        if stuck > self.FILL_STUCK and self.settings.get('dungeon-room-shuffle', 'off') != 'off':
+                            raise RuntimeError(f'fill stuck: {item} found no place {stuck} times')
                         undo_location = placement_tracker.pop(0)
                         locations.append(undo_location)
                         random.shuffle(locations)

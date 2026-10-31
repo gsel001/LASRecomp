@@ -71,17 +71,20 @@ def short(cell):
 
 # ---------------------------------------------------------------- doorway rows
 def lab_row(cat, layouts, romfs, x, y):
-    """door_jumps row out of stub x, in at stub y (dungeon_gen._jump_row), + the target level when it's another one."""
+    """door_jumps row out of stub x, in at stub y (dungeon_gen._jump_row); into another level: + lateral (10th column,
+    always there) and the target level (11th)."""
     lx, ly = level_of(x), level_of(y)
     if ly == ET:  # (arrives at ET_START, Eagle's Tower's own entrance)
-        depth, height = 0.0, -100.0
+        depth, height, lateral = 0.0, -100.0, 0.0
     else:
         room = layouts[ly][y[1]]
         own = any(not d[2].endswith('(mirror)') and d[0] == y[2] and abs(d[3] - y[3]) <= 1
                   for d in cat[room]['doors'] if len(d) > 3)
-        depth, height = dg.landing_depth(romfs, room, y[2], y[3], 1 if own else 0) if romfs else (2.2, 0.0)
+        depth, height, lateral = dg.landing_depth(romfs, room, y[2], y[3], 1 if own else 0) if romfs else (2.2, 0.0, 0.0)
     row = (lx, short(x[1]), x[2], x[3], y[3], short(y[1]), y[2], depth, height)
-    return row + (ly,) if lx != ly else row
+    if lx != ly:
+        return row + (lateral, ly)
+    return row + (lateral,) if lateral else row
 
 
 def with_followers(cat, layouts, romfs, follow, links):
@@ -105,13 +108,17 @@ def _pair_list(stubs):
     return pairs, stubs[len(pairs) * 2:]
 
 
-def pair_two_way(pieces, rng):
-    """Coupled: {piece: [stubs]} -> [(stub, stub)] (a stub paired with itself: a wall), or None."""
+def pair_two_way(pieces, rng, oneway=lambda x: False):
+    """Coupled: {piece: [stubs]} -> [(stub, stub)] (a stub paired with itself: a wall), or None. oneway: drop-down-only
+    doorways (dungeon_gen.inward_only) never carry the spanning tree, so every piece hangs on by a two-way doorway."""
     keys = sorted(pieces, key=str)
     rng.shuffle(keys)
     keys.sort(key=lambda k: -len(pieces[k]))
+    if len(keys) > 1 and any(all(oneway(x) for x in pieces[k]) for k in keys):
+        return None  # (a piece left only through drop-down-only doorways: Link would be stuck in it)
     for v in pieces.values():
         rng.shuffle(v)
+        v.sort(key=lambda x: not oneway(x))  # (two-way doorways last: the tree takes [-1])
     linked, pairs = [keys[0]], []
     for k in keys[1:]:
         if not pieces[k]:
@@ -162,13 +169,13 @@ def pair_two_way(pieces, rng):
     return pairs + [(x, x) for x in left]  # (odd ones out: back into their own doorway - a wall)
 
 
-def pair_decoupled(pieces, rng):
+def pair_decoupled(pieces, rng, oneway=lambda x: False):
     """Decoupled: {stub: target stub}, a permutation of the free doorways. A ring through every piece (wing by wing,
     the wings in random order) keeps the Labyrinth reachable and escapable everywhere; the rest at random, within the
-    wing mostly, never into the room it leaves."""
+    wing mostly, never into the room it leaves. The ring never leaves a piece by a drop-down-only doorway (oneway)."""
     by_wing = {}
     for k in sorted(pieces, key=str):
-        if not pieces[k]:
+        if not pieces[k] or (len(pieces) > 1 and all(oneway(x) for x in pieces[k])):
             return None
         by_wing.setdefault(k[0], []).append(k)
     wings = sorted(by_wing)
@@ -182,6 +189,7 @@ def pair_decoupled(pieces, rng):
     for k in ring:
         v = pieces[k][:]
         rng.shuffle(v)
+        v.sort(key=oneway)  # (the way out: a two-way doorway)
         exits[k], arrivals[k] = v[0], v[-1]
     link = {}
     if len(ring) > 1:
@@ -208,10 +216,10 @@ def door_regions(levels):
 
 
 def pick_arrivals(cat, layouts, rng, romfs):
-    """{door region: (level, cell, side, slot, depth, height, start)}: where each overworld dungeon door (but Eagle's
-    Tower's) arrives - a doorway of a room of any wing, no two doors in one room. start: the start point the game puts
-    Link at - the dungeon's own entrance start for an entrance room, else a new one ('LabIn_<cell><side><slot>',
-    added in stage 2)."""
+    """{door region: (level, cell, side, slot, depth, height, start, lateral)}: where each overworld dungeon door (but
+    Eagle's Tower's) arrives - a doorway of a room of any wing, no two doors in one room. start: the start point the
+    game puts Link at - the dungeon's own entrance start for an entrance room, else a new one
+    ('LabIn_<cell><side><slot>', added in stage 2). lateral: see dungeon_gen.landing_depth."""
     lr = json.load(open(os.path.join(HERE, 'location_rooms.json')))
     cand = []
     for lv in sorted(layouts):
@@ -238,13 +246,13 @@ def pick_arrivals(cat, layouts, rng, romfs):
         lv2, cell, room, ways = rng.choice(pool)
         used.add(cell)
         if cell == dg.ENTRANCES[lv2]:  # (its own entrance start, as the game's door uses)
-            out[region] = (lv2, short(cell), None, None, None, None, 'entrance')
+            out[region] = (lv2, short(cell), None, None, None, None, 'entrance', 0.0)
             continue
         s, slot = rng.choice(ways)
         own = any(not d[2].endswith('(mirror)') and d[0] == s and abs(d[3] - slot) <= 1
                   for d in cat[room]['doors'] if len(d) > 3)
-        depth, height = dg.landing_depth(romfs, room, s, slot, 1 if own else 0) if romfs else (2.2, 0.0)
-        out[region] = (lv2, short(cell), s, slot, depth, height, f'LabIn_{short(cell)}{s}{slot}')
+        depth, height, lateral = dg.landing_depth(romfs, room, s, slot, 1 if own else 0) if romfs else (2.2, 0.0, 0.0)
+        out[region] = (lv2, short(cell), s, slot, depth, height, f'LabIn_{short(cell)}{s}{slot}', lateral)
     return out
 
 
@@ -274,11 +282,11 @@ def start_name(cell, side, slot):
     return f'LabIn_{cell}{side}{slot}'
 
 
-def landing(cell, side, slot, depth, height):
+def landing(cell, side, slot, depth, height, lateral=0.0):
     """(x, y, z, facing) just inside a doorway (as runtime/hle/doorjump.c lands a jump): depth from the room edge,
-    on the landing floor (height; < -90: the floor at 0)."""
+    on the landing floor (height; < -90: the floor at 0), lateral along the edge from the doorway's centre."""
     x0, z0 = (ord(cell[2]) - ord('A')) * 15.0, (int(cell[:2]) - 1) * 12.0
-    along = int(slot) * 0.75
+    along = int(slot) * 0.75 + lateral
     x, z = {'N': (x0 + along, z0 + depth), 'S': (x0 + along, z0 + 12.0 - depth),
             'W': (x0 + depth, z0 + along), 'E': (x0 + 15.0 - depth, z0 + along)}[side]
     return (x, height if height > -90 else 0.0, z, FACING[side])
@@ -289,18 +297,19 @@ def starts(info, rows):
     every row into another level (but Eagle's Tower's: ET_START) and every overworld door's arrival."""
     out = {}
     for r in rows:
-        if len(r) > 9 and r[9] != r[0] and r[9] != ET:
-            out.setdefault(r[9], {})[start_name(r[5], r[6], r[4])] = landing(r[5], r[6], r[4], float(r[7]), float(r[8]))
+        if dg.is_cross(r) and r[10] != ET:
+            out.setdefault(r[10], {})[start_name(r[5], r[6], r[4])] = landing(r[5], r[6], r[4], float(r[7]),
+                                                                               float(r[8]), float(r[9]))
     for region, a in (info.get('arrivals') or {}).items():
-        lv, cell, side, slot, depth, height, st = a
+        lv, cell, side, slot, depth, height, st, lateral = a
         if st != 'entrance':
-            out.setdefault(lv, {})[st] = landing(cell, side, slot, depth, height)
+            out.setdefault(lv, {})[st] = landing(cell, side, slot, depth, height, lateral)
     return out
 
 
 def arrival_start(a):
     """(level, start name, start mode) an arrival (labyrinth.json arrivals) puts Link at."""
-    lv, cell, side, slot, depth, height, st = a
+    lv, st = a[0], a[6]
     if st == 'entrance':
         return lv, ENTRANCE_START[lv], 'LevelDungeonIn'
     return lv, st, ''
@@ -339,7 +348,7 @@ def write_doors(romfs, out, info, rows):
         edit('Field', room, lambda x, lv=lv: x.parameters[0] == lv.encode(), arrival_start(a))
         n += 1
         lv2, st, _ = arrival_start(a)
-        x, _, z, _ = landing(*a[1:6]) if a[6] != 'entrance' else _start_pos(romfs, lv2, st)
+        x, _, z, _ = landing(*a[1:6], a[7]) if a[6] != 'entrance' else _start_pos(romfs, lv2, st)
         doors.append((region, OUTSIDE[region], lv2, st, x, z))
     x, _, z, _ = _start_pos(romfs, ET, ET_START)
     doors.append(('eagle-tower', OUTSIDE['eagle-tower'], ET, ET_START, x, z))
@@ -348,10 +357,10 @@ def write_doors(romfs, out, info, rows):
                 'it leads to, x, z\n')
         for d in doors:
             f.write('%s\t%s\t%s\t%s\t%g\t%g\n' % d)
-    out_row = next((r for r in rows if r[0] == ET and len(r) > 9), None)
+    out_row = next((r for r in rows if r[0] == ET and dg.is_cross(r)), None)
     if out_row:
         edit(ET, ET_CELL, lambda x: x.parameters[2] == b'DungeonOut',
-             (out_row[9], start_name(out_row[5], out_row[6], out_row[4]), ''))
+             (out_row[10], start_name(out_row[5], out_row[6], out_row[4]), ''))
         n += 1
     return n
 
@@ -360,26 +369,31 @@ def write_doors(romfs, out, info, rows):
 def plan(cat, seed, romfs, mode, settings=None, et_locks=0, rounds=None):
     """-> ({level: layout}, rows, info): the wings' layouts (dungeon_gen names: {'Lv01TailCave_08D': room}), every
     door_jumps row (rows into another level have 10 fields) and info (arrivals, links, statistics: labyrinth.json)."""
-    levels = list(dg.ENTRANCES)
+    levels = [lv for lv in dg.ENTRANCES if lv != ET]  # (Eagle's Tower: kept whole, ET_STUB)
     if rounds is None:
         rounds = int(os.environ.get('LARECOMP_GEN_ROUNDS', 8))
     fixed = set()
     for lv in levels:
         fixed |= set(dg.anchors_of(cat, lv)) | {dg.ENTRANCES[lv]}
-    pool = {k for k, v in cat.items() if len(v['unit']) == 1 and dg.movable(v) and k not in fixed
+    pool = {k for k, v in cat.items() if len(v['unit']) == 1 and dg.movable(v, k) and k not in fixed
             and k.split('_')[0] in levels}
+    inward = dg.inward_only(romfs) if romfs else {}
     keysanity = (settings or {}).get('keysanity', 'off') != 'off'
     best, why = None, {}
     for rnd in range(rounds):
         sub = seed if rnd == 0 else f'{seed}#{rnd}'
         rng = random.Random(sub + '-labyrinth')
-        out = dg.chaos_place(cat, sub, romfs, levels, rng, pool, shuffle=rnd > 0)
-        if out is None:
+        # (Coupled: every wing an even number of free doorway sides but one, whose odd one out pairs with Eagle's
+        # Tower's way out - no doorway ever leads back into itself)
+        placed = dg.chaos_place(cat, sub, romfs, levels, rng, pool, shuffle=rnd > 0, even=mode != 'decoupled',
+                                flip={rng.choice(sorted(levels))})
+        if placed is None:
             why['placement'] = why.get('placement', 0) + 1
             continue
+        out = placed[0]
         pieces, follow = {}, {}
         for lv in levels:
-            comps, by_comp, fol = dg.chaos_pieces(cat, out[lv], dg.ENTRANCES[lv], rng)
+            comps, by_comp, fol = dg.chaos_pieces(cat, lv, out[lv], dg.ENTRANCES[lv], rng, romfs)
             if any(k not in by_comp for k in comps):  # (a piece without a free doorway: no way to link it)
                 pieces = None
                 break
@@ -394,12 +408,14 @@ def plan(cat, seed, romfs, mode, settings=None, et_locks=0, rounds=None):
         need = {(lv, c) for lv, L in short_layouts.items() for c, r in L.items() if any(dg.openings(cat, r).values())}
         need.add(rl.ET_NODE)
         found = None
+        def oneway(x, out=out):
+            return x[0] is not None and (out[level_of(x)][x[1]], x[2], x[3]) in inward
         for attempt in range(40):
             p = {k: list(v) for k, v in pieces.items()}
             if mode == 'decoupled':
-                link = pair_decoupled(p, rng)
+                link = pair_decoupled(p, rng, oneway)
             else:
-                pairs = pair_two_way(p, rng)
+                pairs = pair_two_way(p, rng, oneway)
                 link = None
                 if pairs is not None:
                     link = {}

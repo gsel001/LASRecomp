@@ -13,8 +13,10 @@
 
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "i18n.h"
 #include "osk.h"
 #include "pad_nav.h"
+#include "plastic.h"
 
 static struct {
     int open;                        // a field's keyboard is up
@@ -82,7 +84,7 @@ bool ui_input_text(const char *label, char *buf, size_t size, ImGuiInputTextFlag
         s.open = 1, s.appearing = true, s.done = 0;
         s.field = id, s.buf = buf, s.size = size, s.flags = flags;
         snprintf(s.text, sizeof s.text, "%s", buf);
-        snprintf(s.title, sizeof s.title, "%s", title ? title : hint ? hint : "Enter text");
+        snprintf(s.title, sizeof s.title, "%s", title ? title : hint ? hint : L("Enter text"));
         r = false;
     }
     return r;
@@ -132,15 +134,15 @@ int osk_keys(char *text, size_t cap, int max_chars, bool appearing, float scale,
     }
     if (ImGui::Button(upper ? "abc" : "ABC", ImVec2(k * 2, k))) upper = !upper;
     ImGui::SameLine();
-    if (ImGui::Button("Space", ImVec2(k * 3, k)) && len > 0) add(' ');
+    if (ImGui::Button(L("Space"), ImVec2(k * 3, k)) && len > 0) add(' ');
     ImGui::SameLine();
-    if (ImGui::Button("Delete", ImVec2(k * 2, k))) del();
+    if (ImGui::Button(L("Delete"), ImVec2(k * 2, k))) del();
     ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(k * 2, k))) r = -1;
+    if (ImGui::Button(L("Cancel"), ImVec2(k * 2, k))) r = -1;
     ImGui::SameLine();
-    if (ImGui::Button("OK", ImVec2(k * 2, k))) r = 1;
-    ImGui::TextDisabled("%s  type      %s  delete      %s  OK      (%d / %d)", ui_pad_confirm_label(), ui_pad_back_label(),
-                        ui_pad_start_label(), len, max_chars);
+    if (ImGui::Button(L("OK"), ImVec2(k * 2, k))) r = 1;
+    ImGui::TextDisabled(L("%s  type      %s  delete      %s  OK      (%d / %d)"), L(ui_pad_confirm_label()),
+                        L(ui_pad_back_label()), L(ui_pad_start_label()), len, max_chars);
     return r;
 }
 
@@ -178,7 +180,7 @@ void osk_draw(ImFont *big, float scale) {
         return;
     }
     ImGui::PushFont(big);
-    ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "%s", s.title);
+    ImGui::TextColored(plastic_col(plastic_theme().title), "%s", s.title);
     ImGui::PopFont();
     int max = (int)(s.size < sizeof s.text ? s.size : sizeof s.text) - 1;
     int r = cancel ? -1 : osk_keys(s.text, sizeof s.text, max, s.appearing, scale, big);

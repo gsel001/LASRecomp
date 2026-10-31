@@ -7,7 +7,8 @@ that no longer holds, so for every shuffled dungeon this module builds the logic
 
   graph      cells of the layout; edges = doorways that connect (neighbours whose doorways line up, door jumps -
              directed), plus the stairs links (side-view passages; stairs rooms are
-             anchors and never move)
+             anchors and never move); drop-down-only doorways (a ledge Link can't climb from his
+             room: dungeon_gen.inward_only) lead in only
   doors      only a room's OWN door actors count (a "(mirror)" door stood in the old neighbour, which isn't there):
              lock -> the dungeon's small keys, boss door -> its Nightmare Key, cracked wall -> bombs, shutter ->
              something to fight with / hit switches (approximate), pot in the doorway -> break-pot, water in the
@@ -24,23 +25,33 @@ that no longer holds, so for every shuffled dungeon this module builds the logic
              such a token sat inside an OR, the OR becomes an AND - stricter, never weaker). A check whose room isn't
              used anywhere is excluded (junk). Dungeon items go to the dungeon a check physically is in now.
 
+  shutters   by what opens each one (shutter_req): the enemies its kill-all trigger watches (or the mini-boss / boss
+             that drives it; a shutter nothing drives: every enemy in the room) -> their LAS kill rules (kill-spiny,
+             kill-pols-voice...; the pit variant in rooms with pits). Those enemies always stay vanilla (LAS enemies.py
+             kill_linked). A switch / block / floor tile -> something to hit switches with; anything else -> something
+             to fight with.
+
 Not modelled yet (stricter or approximate): what a room needs to cross it between two doorways (pits, water,
-blocks inside the room), the exact enemies / switches behind each shutter, key counts along paths.
+blocks inside the room), key counts along paths.
 """
 import json
 import os
 import re
+import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import rooms  # noqa: E402  (cell positions: Eagle's Tower's grid doesn't follow its names)
 
 LEVELS = {
     'Lv10ClothesDungeon': (0, 'color-dungeon'), 'Lv01TailCave': (1, 'tail-cave'), 'Lv02BottleGrotto': (2, 'bottle-grotto'),
     'Lv03KeyCavern': (3, 'key-cavern'), 'Lv04AnglersTunnel': (4, 'angler-tunnel'), 'Lv05CatfishsMaw': (5, 'catfish-maw'),
     'Lv06FaceShrine': (6, 'face-shrine'), 'Lv07EagleTower': (7, 'eagle-tower'), 'Lv08TurtleRock': (8, 'turtle-rock'),
 }
-SHUTTER = 'sword | shoot-arrows | bombs | rod | boomerang | hookshot'  # fight the room's enemies / hit its switches
+SHUTTER = 'sword | shoot-arrows | bombs | rod | boomerang'  # a shutter whose enemies LAS has no kill rule for (the
+SWITCH_SHUTTER = 'sword | shoot-arrows | bombs | rod | boomerang | hookshot'  # hookshot only stuns) / a switch's shutter
 DOOR_REQ = {'cracked': 'bombs', 'potdoor': 'break-pot', 'blocked:water': 'flippers', 'blocked:crystal': 'break-crystal',
-            'blocked:block': None, 'shutter': 'rs-shutter'}
+            'blocked:block': None, 'shutter': 'rs-shutter'}  # (shutters: shutter_req, this only without the room)
 IMPASSABLE = {'blocked:statue', 'blocked:chest'}
 STEP = {'N': (0, -1), 'S': (0, 1), 'W': (-1, 0), 'E': (1, 0)}
 OPP = {'N': 'S', 'S': 'N', 'W': 'E', 'E': 'W'}
@@ -48,16 +59,24 @@ MAX_TERMS = 48
 EXIT_REQ = {}  # catalog room -> frozenset of atoms leaving it needs (mini-boss souls: tools/rando/souls.py exit_req)
 
 
+# checks on a ledge that only their room's vanilla neighbour reaches (dungeon_gen.TIED / STAY keep the two together):
+# the check also needs that neighbour's cell - the way up is there (Face Shrine 08G's ramp, Key Cavern 03D's, Turtle
+# Rock 03E's), not in the check's own room
+LEDGE_VIA = {'D6-wizzrobes-ledge': 'Lv06FaceShrine_08G', 'D3-east-ledge': 'Lv03KeyCavern_03D',
+             'D8-northern-ledge': 'Lv08TurtleRock_03E'}
+
+
 # location subtypes LAS shuffles (shuffler.py: every other item location keeps its vanilla content)
 RANDOMIZED_SUBTYPES = ('chest', 'boss', 'enemy', 'drop', 'npc', 'standing', 'overworld-statue', 'dungeon-statue')
 
 
-def cell_pos(cell):  # '06C' -> (col 2, row 6)
-    return ord(cell[2]) - ord('A'), int(cell[:2])
+def cell_pos(cell, level=None):  # '06C' -> (col 2, row 6) (Eagle's Tower: its own grid, rooms.POSITIONS)
+    p = rooms.POSITIONS.get(level, {}).get(cell[:3])
+    return p if p else (ord(cell[2]) - ord('A'), int(cell[:2]))
 
 
-def cell_name(col, row):
-    return f'{row:02d}{chr(ord("A") + col)}'
+def cell_name(col, row, level=None):
+    return rooms.cell_name(level, col, row).rsplit('_', 1)[1] if level else f'{row:02d}{chr(ord("A") + col)}'
 
 
 # ---------------------------------------------------------------- conditions: parse, strip, print
@@ -212,8 +231,7 @@ def lock_flag(romfs, room, side):
         out = []
         try:
             r = leb.Room(open(_rooms._leb_path(romfs, room), 'rb').read())
-            col, row = cell_pos(room.rsplit('_', 1)[1])
-            x0, z0 = 15.0 * col, 12.0 * (row - 1)
+            x0, z0 = _rooms.cell_origin(room)
             for a in r.actors:
                 if a.type != 0xED:
                     continue
@@ -255,13 +273,131 @@ def lock_blocks(romfs, room):
     return _block_cache[room]
 
 
-def door_terms(types, n, entering=False, room_types=(), lock_id='', key_n=None):
+# enemy actor type -> the LAS kill rules (logic.yml) a shutter waiting for it needs. Types not listed: SHUTTER.
+KILL = {0x1b: ('kill-zol-green',), 0x1c: ('kill-zol-red',), 0x1d: ('kill-zol-green',),  # (0x1d: Gels, as Zols)
+        0x24: ('kill-hardhat-beetle',), 0x25: ('kill-rope',), 0x26: ('kill-vire',), 0x27: ('kill-minimoldorm',),
+        0x28: ('kill-spiny',), 0x2e: ('kill-stalfos-spear',), 0x33: ('kill-gibdo',), 0x34: ('kill-keese',),
+        0x31: ('kill-bombite-red', 'kill-bombite-green'), 0x32: ('kill-bombite-red', 'kill-bombite-green'),  # (LAS's
+        0x37: ('kill-pols-voice',), 0x38: ('kill-like-like',), 0x39: ('kill-stalfos',),  # D3-triple-bombites: both)
+        0x3a: ('kill-stalfos',), 0x3b: ('kill-wizzrobe',), 0x40: ('kill-helmasaur',), 0x41: ('kill-shy-guy',),
+        0x42: ('kill-pairodd',), 0x43: ('kill-water-tektite',), 0x44: ('kill-star',)}
+NOT_COUNTED = (0x3d, 0xb7)  # Sparks, Bubbles: no kill-all check waits for them
+PIT_KILLS = ('kill-hardhat-beetle', 'kill-spiny', 'kill-stalfos', 'kill-wizzrobe', 'kill-zol-red')  # (condition-pit)
+KILL_TRIGGERS = (0xF0, 0x1B9, 0x247)  # TagHolocaust, TagPopChecker, TagHistoricalHolocaustChecker: watched enemies dead
+
+
+def _kills():
+    import souls  # (bosses / mini-bosses that drive their arena's shutters)
+    out = dict(KILL)
+    for _, _, t, kill, _ in souls.BOSSES:
+        out[t] = (kill,)
+    for _, t, kill, _ in souls.MINIBOSSES:
+        if kill:
+            out[t] = (kill,)
+    return out
+
+
+_shutter_cache = {}
+_level_cache = {}
+
+
+def _level_rooms(romfs, level):
+    from RandomizerCore.Tools import leb
+    if level not in _level_cache:
+        d = os.path.join(romfs, 'region_common', 'level', level)
+        _level_cache[level] = {f[:-4]: leb.Room(open(os.path.join(d, f), 'rb').read())
+                               for f in sorted(os.listdir(d)) if f.endswith('.leb')}
+    return _level_cache[level]
+
+
+def has_pits(r):
+    """A room file with pits (grid tiles: byte 0 bit 0, or sunk below -0.3, that aren't water / lava)."""
+    import struct
+    import rooms as _rooms
+    g = _rooms._grid(r)
+    raw = g[b'data'].data if g and b'data' in g else b''
+    return any((raw[o] & 1 or struct.unpack_from('<f', raw, o + 12)[0] < -0.3) and not raw[o + 2] & 4
+               for o in range(0, len(raw) - 15, 16))
+
+
+def shutter_req(romfs, room, side):
+    """frozenset of atoms the room's own shutter(s) on that side need to open: what opens it (see the docstring)."""
+    key = (room, side)
+    if key in _shutter_cache:
+        return _shutter_cache[key]
+    sys.path.insert(0, os.path.join(HERE, '..', '..', 'third_party', 'LAS-Randomizer'))
+    import rooms as _rooms
+    level = room.rsplit('_', 1)[0]
+    try:
+        lvl = _level_rooms(romfs, level)
+        r = lvl[room]
+    except (OSError, KeyError):
+        _shutter_cache[key] = frozenset({'rs-shutter'})
+        return _shutter_cache[key]
+    kills, pits = _kills(), has_pits(r)
+    A = r.actors
+
+    def atoms(acts):  # the kill rules for these enemies (rs-shutter for one LAS has no rule for)
+        out = set()
+        for a in acts:
+            if a.type not in NOT_COUNTED:
+                out.update(f'{k}[pit]' if pits and k in PIT_KILLS else k for k in kills.get(a.type, ('rs-shutter',)))
+        return out
+
+    def watched(t, acts):
+        return [acts[s[1]] for s in t.relationships.section_1 if 0 <= s[1] < len(acts)]
+
+    x0, z0 = _rooms.cell_origin(room)
+    req = set()
+    for i, a in enumerate(A):
+        if a.type != 0xEF:
+            continue
+        lx, lz = a.posX - x0, a.posZ - z0
+        d = {'W': lx, 'E': 15.0 - lx, 'N': lz, 'S': 12.0 - lz}
+        if min(d, key=d.get) != side:
+            continue
+        flag = next((f for t, f in a.switches if t == 1), None)
+        drivers = [b for j, b in enumerate(A) if j != i and b.type != 0xEF and
+                   i in [s[1] for s in b.relationships.section_1]]
+        got = None
+        if drivers:  # a mini-boss / boss (its relationships open the doors)
+            got = atoms(drivers)
+        elif flag is None:  # nothing drives it: the room's own all-enemies-dead check (LAS keeps them all vanilla)
+            enemies = [b for b in A if b.name.startswith(b'Enemy')]
+            got = atoms(enemies) if enemies else None
+        else:  # opened by its flag: a kill-all trigger here (or in another room of the level), or a switch
+            setters = [b for b in A if b.type != 0xEF and (1, flag) in [tuple(s) for s in b.switches]]
+            trig = [b for b in setters if b.type in KILL_TRIGGERS]
+            if not trig and not setters:
+                for other, ro in lvl.items():
+                    if other != room:
+                        trig += [b for b in ro.actors if b.type in KILL_TRIGGERS and
+                                 (1, flag) in [tuple(s) for s in b.switches]]
+                        if trig:
+                            A2 = ro.actors
+                            break
+            else:
+                A2 = A
+            if trig:
+                got = set().union(*(atoms(watched(t, A2)) for t in trig))
+            elif setters:  # a floor switch, block, tile, horse head...
+                got = {'rs-switch-shutter'}
+        req |= got if got else {'rs-shutter'}
+    _shutter_cache[key] = frozenset(req or {'rs-shutter'})
+    return _shutter_cache[key]
+
+
+def door_terms(types, n, entering=False, room_types=(), lock_id='', shutter=None, key_n=None):
     """frozenset of requirement atoms for passing these door types, or None if impassable. entering: going INTO the
     room that owns the doors (else leaving it). A one-way door passes one way: out of the room with the 0x1A3 half,
-    into the room with the 0x1A4 half. key_n: the dungeon whose small keys open locks (Labyrinth: the shared key,
-    SHARED_KEY_N; the Nightmare-Key door stays its own dungeon's)."""
+    into the room with the 0x1A4 half. shutter: what the owner's shutter on that side needs (shutter_req). key_n: the
+    dungeon whose small keys open locks (Labyrinth: the shared key, SHARED_KEY_N; the Nightmare-Key door stays its own
+    dungeon's)."""
     req = set()
     for t in types:
+        if t == 'shutter' and shutter:
+            req |= shutter
+            continue
         if t == 'oneway':
             if (ONEWAY_IN if entering else ONEWAY_OUT) in room_types:
                 continue
@@ -336,20 +472,44 @@ def stairs_links(romfs, level, cat=None):
     return sorted(set(links))
 
 
+def hole_links(romfs, level, cat):
+    """[(grid room, grid room it drops into)]: holes (AreaHoleLower) name a player start ('<room>' or '<room>_a'). Eagle's
+    Tower starts collapsed in room shuffle seeds (eagle_tower.py): 2F 04C's stairs lead to 04G (stairs_links finds it from
+    04G's side)."""
+    import sys
+    sys.path.insert(0, os.path.join(HERE, '..', '..', 'third_party', 'LAS-Randomizer'))
+    from RandomizerCore.Tools import leb
+    d = os.path.join(romfs, 'region_common', 'level', level)
+    out = []
+    for f in sorted(os.listdir(d)):
+        room = f[:-4]
+        if not f.endswith('.leb') or room not in cat:
+            continue
+        for a in leb.Room(open(os.path.join(d, f), 'rb').read()).actors:
+            ps = [p for p in a.parameters or () if isinstance(p, bytes) and p]  # (the first one is empty)
+            if a.name.decode(errors='ignore').startswith('AreaHoleLow') and ps:
+                t = ps[0].decode(errors='ignore')
+                t = t if t in cat else t.rsplit('_', 1)[0] if t.rsplit('_', 1)[0] in cat else None
+                if t and t != room:
+                    out.append((room, t))
+    return sorted(set(out))
+
+
 def rooms_neighbour(room, side):
     import rooms
     return rooms.neighbour(room, side)
 
 
-def level_graph(cat, romfs, level, layout, jump_rows, openings, key_n=None, flag_sink=None):
-    """{cell: [(cell, frozenset req)]} directed edges; lock count. key_n: see door_terms (Labyrinth: lock ids name
-    the level too, flag_sink collects the distinct locks). Rows into another level (Labyrinth) only mark their doorway
-    as taken: labyrinth_graph adds those edges."""
+def level_graph(cat, romfs, level, layout, jump_rows, openings, trace=None, key_n=None, flag_sink=None):
+    """{cell: [(cell, frozenset req)]} directed edges; lock count. trace: a list getting (cell, side, slot, target)
+    for every edge through a doorway (inward_exits). key_n: see door_terms (Labyrinth: lock ids name the level too,
+    flag_sink collects the distinct locks). Rows into another level (Labyrinth) only mark their doorway as taken:
+    labyrinth_graph adds those edges."""
     n = LEVELS[level][0]
     kn = n if key_n is None else key_n
     # (Labyrinth: lock ids name the level - a vanilla door's two halves moved into two levels get two flags there)
     lv_tag = '' if key_n is None else level + ':'
-    pos = {cell_pos(c): c for c in layout}
+    pos = {cell_pos(c, level): c for c in layout}
     edges = {c: [] for c in layout}
     flags = set()  # distinct locks: one per 'opened' flag (a vanilla door's two halves share it)
     for cell, room in layout.items():
@@ -361,25 +521,36 @@ def level_graph(cat, romfs, level, layout, jump_rows, openings, key_n=None, flag
     locks = len(flags)
     if flag_sink is not None:
         flag_sink.update((level, f) for f in flags)
+    import dungeon_gen
+    # drop-down-only doorways (dungeon_gen.inward_only): Link comes in through them, never leaves by them - no edge
+    # out (a ledge holding stairs: out from the rooms the stairs come from, see below)
+    inward = dungeon_gen.inward_only(romfs) if romfs else {}
+    via_stairs = []  # (cell, target, req): leaving through such a doorway after arriving by the stairs on its ledge
     jumped = set()
     for row in jump_rows:
         if row[0] != level:
             continue
         cell, side, own = row[1], row[2], int(row[3])
-        if len(row) > 9 and row[9] != level:  # (into another level: labyrinth_graph)
+        if len(row) > 10 and row[10] != level:  # (into another level: labyrinth_graph)
             jumped.add((cell, side, own))
             continue
         target = row[5]  # (level, cell, side, own, partner, tcell, tside, ...)
         jumped.add((cell, side, own))
         if target not in layout:
             continue
+        kind = inward.get((layout[cell], side, own))
         req = door_terms(own_doors(cat, layout[cell], side, own), n, room_types=cat[layout[cell]].get('types', ()),
-                         lock_id=f'{lv_tag}{lock_flag(romfs, layout[cell], side) or f"{cell}{side}{own}"}', key_n=key_n)
-        if req is not None:
+                         lock_id=f'{lv_tag}{lock_flag(romfs, layout[cell], side) or f"{cell}{side}{own}"}', key_n=key_n,
+                         shutter=shutter_req(romfs, layout[cell], side))
+        if req is not None and kind == 'arrival':
+            via_stairs.append((cell, target, req))
+        elif req is not None and not kind:
             edges[cell].append((target, req))
+            if trace is not None:
+                trace.append((cell, side, own, target))
     for cell, room in layout.items():
         op = openings(cat, room)
-        c, r = cell_pos(cell)
+        c, r = cell_pos(cell, level)
         for side in 'NSWE':
             nb = pos.get((c + STEP[side][0], r + STEP[side][1]))
             if nb is None:
@@ -396,28 +567,67 @@ def level_graph(cat, romfs, level, layout, jump_rows, openings, key_n=None, flag
                 if (cell, side, slot) in jumped or (slot not in theirs and not home_pair):
                     continue
                 req_out = door_terms(own_doors(cat, room, side, slot), n, room_types=cat[room].get('types', ()),
-                                     lock_id=f'{lv_tag}{lock_flag(romfs, room, side) or f"{cell}{side}{slot}"}', key_n=key_n)
+                                     lock_id=f'{lv_tag}{lock_flag(romfs, room, side) or f"{cell}{side}{slot}"}',
+                                     key_n=key_n, shutter=shutter_req(romfs, room, side))
                 req_in = door_terms(own_doors(cat, layout[nb], OPP[side], slot), n, entering=True,
                                     room_types=cat[layout[nb]].get('types', ()),
                                     lock_id=f'{lv_tag}{lock_flag(romfs, layout[nb], OPP[side]) or f"{nb}{OPP[side]}{slot}"}',
-                                    key_n=key_n)
+                                    key_n=key_n, shutter=shutter_req(romfs, layout[nb], OPP[side]))
                 if req_out is None or req_in is None:
                     continue
-                edges[cell].append((nb, req_out | req_in))
+                kind = inward.get((room, side, slot))
+                if kind == 'arrival':
+                    via_stairs.append((cell, nb, req_out | req_in))
+                elif not kind:
+                    edges[cell].append((nb, req_out | req_in))
+                    if trace is not None:
+                        trace.append((cell, side, slot, nb))
     for cell, room in layout.items():  # leaving a room with keyhole blocks: they may guard the way (see lock_blocks)
         bl = frozenset(f'LOCK|{kn}|{lv_tag}block{b}' for b in lock_blocks(romfs, room))
         if bl:
             edges[cell] = [(t, r | bl) for t, r in edges[cell]]
+    where = {room: cell for cell, room in layout.items()}  # (LINK_LEVELS: stairs / hole rooms may have moved)
+    stairs_from = {}  # cell -> cells whose stairs arrive in it
     for a, b in stairs_links(romfs, level, cat):
         ca, cb = a.rsplit('_', 1)[1], b.rsplit('_', 1)[1]
-        if layout.get(ca) == a and layout.get(cb) == b:  # (stairs rooms stay home)
+        if level in dungeon_gen.LINK_LEVELS:
+            ca, cb = where.get(a), where.get(b)
+            # (Eagle's Tower 04G: the stairs arrive boxed in by orange pegs - set them with 04C's crystal switch)
+            req = frozenset({'break-crystal'}) if {a, b} == {'Lv07EagleTower_04C', 'Lv07EagleTower_04G'} else frozenset()
+            if ca and cb:
+                edges[ca].append((cb, req))
+                edges[cb].append((ca, req))
+                stairs_from.setdefault(ca, []).append((cb, req))
+                stairs_from.setdefault(cb, []).append((ca, req))
+        elif layout.get(ca) == a and layout.get(cb) == b:  # (stairs rooms stay home)
             edges[ca].append((cb, frozenset()))
             edges[cb].append((ca, frozenset()))
+            stairs_from.setdefault(ca, []).append((cb, frozenset()))
+            stairs_from.setdefault(cb, []).append((ca, frozenset()))
+    for cell, target, req in via_stairs:  # (Turtle Rock 06E's south strip: its upstairs arrive on it)
+        for src, sreq in stairs_from.get(cell, ()):
+            edges[src].append((target, req | sreq))
+    if level in dungeon_gen.LINK_LEVELS:  # holes: one way down, into the room holding the landing spot
+        for a, b in hole_links(romfs, level, cat):
+            if where.get(a) and where.get(b):
+                edges[where[a]].append((where[b], frozenset()))
     for cell, room in layout.items():  # leaving a mini-boss room (not into its own unit): its soul (EXIT_REQ)
         if EXIT_REQ.get(room):
             edges[cell] = [(t, r if EXIT_REQ.get(layout.get(t)) == EXIT_REQ[room] else r | EXIT_REQ[room])
                            for t, r in edges[cell]]
     return edges, locks
+
+
+def inward_exits(cat, romfs, level, layout, jump_rows):
+    """[(cell, side, slot, target)]: logic edges that leave a cell through a drop-down-only doorway
+    (dungeon_gen.inward_only) - must be none (seed_sweep.py checks every room-shuffled seed). layout: dungeon_gen's
+    ({'Lv.._08D': room}) or cells ('08D')."""
+    import dungeon_gen
+    L = {c.rsplit('_', 1)[-1]: r for c, r in layout.items()}
+    trace = []
+    level_graph(cat, romfs, level, L, jump_rows, dungeon_gen.openings, trace)
+    inward = dungeon_gen.inward_only(romfs)
+    return [t for t in trace if (L[t[0]], t[1], t[2]) in inward]
 
 
 def key_counts(edges, start):
@@ -490,6 +700,7 @@ def apply(cat, romfs, layouts, jump_rows, logic_defs, item_defs, settings, extra
     cell_expr = {}  # (level, cell) -> condition string
     lock_count = {}
     logic_defs['rs-shutter'] = {'type': 'interaction', 'condition-basic': SHUTTER}
+    logic_defs['rs-switch-shutter'] = {'type': 'interaction', 'condition-basic': SWITCH_SHUTTER}
     boss_cell = {}
     junk_delta = [0]
     kcs = {}
@@ -511,9 +722,9 @@ def apply(cat, romfs, layouts, jump_rows, logic_defs, item_defs, settings, extra
             rooms_at.setdefault(room, []).append((level, cell))
             for d in cat.get(room, {}).get('doors', []):
                 if len(d) > 3 and d[2] == 'bossdoor':  # the boss sits behind it
-                    c, r = cell_pos(cell)
+                    c, r = cell_pos(cell, level)
                     dc, dr = STEP[d[0]]
-                    boss_cell[level] = cell_name(c + dc, r + dr)
+                    boss_cell[level] = cell_name(c + dc, r + dr, level)
         if lab:  # (one graph for every dungeon: below)
             continue
         edges, locks = level_graph(cat, romfs, level, layout, jump_rows, dungeon_gen.openings)
@@ -669,6 +880,13 @@ def apply(cat, romfs, layouts, jump_rows, logic_defs, item_defs, settings, extra
             return f'({e}) & key-D{n}:{k}'
         reach = [with_blocks(p) for p in places if cell_expr.get(p)]
         ck = [cell_keys[p] for p in places if p in cell_keys]
+        via = LEDGE_VIA.get(loc)
+        if via and reach:  # (a ledge reached from its vanilla neighbour: that room's cell too)
+            ve = [cell_expr[p] for p in rooms_at.get(via, []) if cell_expr.get(p)]
+            reach = [f'({e}) & ({" | ".join(f"({x})" for x in ve)})' for e in reach] if ve else []
+            vk = [cell_keys[p] for p in rooms_at.get(via, []) if p in cell_keys]
+            if ck and vk:
+                ck = [max(min(ck), min(vk))]
         if ck:
             k = min(ck)
             bl = lock_blocks(romfs, room)
@@ -689,6 +907,8 @@ def apply(cat, romfs, layouts, jump_rows, logic_defs, item_defs, settings, extra
             excluded.add(loc), absent.add(loc)
             unused += 1
             continue
+        # (a pot: its room's vanilla way in isn't this room's business - only what the pot itself needs)
+        cond = v.get('room-local', cond)
         local, _ = strip(parse(cond), drop)
         lvl_now = next((p for p in places if LEVELS[p[0]][0] == home), places[0])[0]
         if 'hit-crystal-switch' in cond and not crystal.get(lvl_now):
@@ -770,6 +990,22 @@ def apply(cat, romfs, layouts, jump_rows, logic_defs, item_defs, settings, extra
             else:
                 if len(ks) < total + dungeon_items(settings):  # (room for the Nightmare Key, Map, Compass, Beak too)
                     settings['room-logic-unfillable'] = f'{level}: {len(ks)} checks for {total + dungeon_items(settings)} dungeon items'
+    # a dungeon whose instrument the room graph can't reach (cut off from its entrance): never a beatable seed - the
+    # next layout instead (seen with Eagle's Tower, DevEaglePlay + dungeon items mcb: the whole tower unreachable)
+    lost = sorted(k for k in excluded if re.match(r'D\d-instrument$', k))
+    if lost and not settings.get('room-logic-unfillable'):
+        settings['room-logic-unfillable'] = 'unreachable ' + ', '.join(lost)
+    # Eagle's Tower (collapsed, eagle_tower.py): the boss is on the roof, up the stairs at the end of 02F's raised
+    # walkway (hookshot / rooster) - 02F has other doorways, so the room graph would let Link past the Nightmare door.
+    # Its checks need 03F (the Nightmare door's room: 02F / 03F / 03G / 02G stay together, dungeon_gen.STAY) and the key.
+    tower = cell_expr.get(('Lv07EagleTower', '03F')) if 'Lv07EagleTower' in layouts else None
+    if tower:
+        roof = f'({tower}) & nightmare-key-D7 & (hookshot | (rooster & bad-pets))'
+        for k in ('D7-instrument', 'D7-eagle'):
+            if k in logic_defs:
+                logic_defs[k]['condition-basic'] = f'{roof} & hookshot & kill-evil-eagle'
+                for lv_ in ('advanced', 'glitched', 'hell'):
+                    logic_defs[k].pop('condition-' + lv_, None)
     if lab:
         return (f'labyrinth of {len(layouts)} dungeons + Eagle\'s Tower, {rewritten} checks rewritten, {unused} in unused '
                 f'rooms (excluded), {fallback} without a room (vanilla condition), {lab_info["total"]} small keys '
@@ -805,8 +1041,8 @@ def boss_door_ok(cat, romfs, level, layout, rows):
             allowed.add(cell)
         for d in cat.get(room, {}).get('doors', []):
             if len(d) > 3 and d[2] == 'bossdoor':
-                c, r = cell_pos(cell)
-                allowed.add(cell_name(c + STEP[d[0]][0], r + STEP[d[0]][1]))
+                c, r = cell_pos(cell, level)
+                allowed.add(cell_name(c + STEP[d[0]][0], r + STEP[d[0]][1], level))
     # beyond the boss arena (the instrument room, the Color Dungeon's reward room): reached through the arena
     todo = [c for c in allowed if c in behind]
     while todo:
@@ -835,8 +1071,9 @@ def vanilla_check(loc, v, settings):
 
 def dungeon_items(settings):
     """How many items besides the small keys stay in their dungeon: Nightmare Key, Map, Compass, Stone Beak, less
-    what the dungeon-items setting sends anywhere."""
-    return 4 - {'mc': 2, 'mcb': 3, 'stone-beak': 1}.get(settings.get('dungeon-items', 'none'), 0)
+    what's given at the start."""
+    from RandomizerCore.Randomizers.data import start_dungeon_items
+    return 4 - len(start_dungeon_items({'dungeon-items': 'none', **settings}))
 
 
 def lr_vanilla(k, v, settings):
@@ -926,6 +1163,7 @@ def labyrinth_graph(cat, romfs, layouts, rows, et_locks):
     {'08D': room}}; rows: door_jumps rows of every level, incl. rows into another level (10 fields)."""
     import dungeon_gen
     edges, flags = {}, set()
+    inward = dungeon_gen.inward_only(romfs) if romfs else {}
     for level, L in layouts.items():
         e, _ = level_graph(cat, romfs, level, L, rows, dungeon_gen.openings, key_n=SHARED_KEY_N, flag_sink=flags)
         for c, outs in e.items():
@@ -933,19 +1171,21 @@ def labyrinth_graph(cat, romfs, layouts, rows, et_locks):
     # Eagle's Tower: its own locks, reachable (and wastable) once Link is inside
     edges[ET_NODE] = [(ET_NODE, frozenset(f'LOCK|{SHARED_KEY_N}|ET{i}' for i in range(et_locks)))] if et_locks else []
     for row in rows:
-        if not (len(row) > 9 and row[9] != row[0]):
+        if not (len(row) > 10 and row[10] != row[0]):
             continue
         src = ET_NODE if row[0] == ET_LEVEL else (row[0], row[1])
-        dst = ET_NODE if row[9] == ET_LEVEL else (row[9], row[5])
+        dst = ET_NODE if row[10] == ET_LEVEL else (row[10], row[5])
         if src not in edges or dst not in edges or src == dst:
             continue
         req = frozenset()
         if src != ET_NODE:  # (leaving Eagle's Tower by its doorway out: nothing in the way)
             level, cell = src
             room, n = layouts[level][cell], LEVELS[level][0]
+            if inward.get((room, row[2], int(row[3]))):
+                continue  # (a drop-down-only doorway: Link never leaves by it - as level_graph, the stairs case too)
             req = door_terms(own_doors(cat, room, row[2], int(row[3])), n, room_types=cat[room].get('types', ()),
                              lock_id=f'{level}:{lock_flag(romfs, room, row[2]) or f"{cell}{row[2]}{row[3]}"}',
-                             key_n=SHARED_KEY_N)
+                             key_n=SHARED_KEY_N, shutter=shutter_req(romfs, room, row[2]))
             if req is None:
                 continue
             req |= frozenset(block_atom(SHARED_KEY_N, level, b, True) for b in lock_blocks(romfs, room))

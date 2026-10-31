@@ -232,13 +232,29 @@ void renderer_get_scale(float *sx, float *sy) { *sx = g_rs_x; *sy = g_rs_y; }
 void renderer_set_scale(float sx, float sy) { g_rs_x = sx; g_rs_y = sy; }
 void renderer_set_alloc_scale(float ax, float ay) { g_al_x = ax; g_al_y = ay; }
 
+// The game's ambient occlusion (issue #356) stays at the Switch's size: its R8 targets (480x270 and the 240x135 blur)
+// and the quarter-size depth-stencil its pass tests against (480x270, made from the depth pyramid). The AO shader
+// takes its 4x4 sample-rotation pattern from the pixel position it works out from the guest size (uv / texel size), so
+// at a render scale other than 1 neighbouring pixels no longer get different rotations: at 25% every pixel got the
+// same one (bands of dark AO on flat ground that crawl as the camera moves: the "haze"), above 1 the pattern grows
+// past the game's 4x4 blur and is left as dither. At the guest size it is the Switch's AO at any resolution, and
+// cheap (a quarter of 1080p). The depth-stencil goes with it: Metal / Vulkan draw a pass only where all its
+// attachments are. LARECOMP_AO_SCALED=1 (A/B): scaled like the rest again.
+static bool tex_guest_sized_ao(const NvnTexture *t) {
+    static int off = -1;
+    if (off < 0) off = getenv("LARECOMP_AO_SCALED") != NULL;
+    if (off) return false;
+    return t->format == 0x1 || (t->format == 0x35 && t->width <= 480);  // R8 unorm / D24S8, 16:9 (checked by the caller)
+}
+
 static bool tex_scalable(const NvnTexture *t) {
     static int off = -1;  // (per texture lookup: cached)
     if (off < 0) off = getenv("LARECOMP_NO_SCALE") != NULL;
     if (off) return false;
     if (t->target != 1 || t->samples > 1 || !(t->flags & 8) || t->width < 32 || t->height < 16) return false;
     float a = (float)t->width / (float)t->height;
-    return a > 1.74f && a < 1.81f;  // 16:9 (1920x1080 and its fractions, 704x396, 60x33...)
+    if (!(a > 1.74f && a < 1.81f)) return false;  // 16:9 (1920x1080 and its fractions, 704x396, 60x33...)
+    return !tex_guest_sized_ao(t);
 }
 
 // First write this frame to a presented image while the output is reshaped: returns true once per frame.
@@ -1304,6 +1320,8 @@ void backend_present_now(NvnTexture *t, uint64_t frame) {
         extern void renderer_set_alloc_scale(float ax, float ay);
         renderer_set_alloc_scale((float)os.ax, (float)os.ay);
         renderer_set_scale((float)sx, (float)sy);
+        id<MTLTexture> scene = nil;  // (the game image as drawn, for the menu: menu_set_scene)
+        float scene_uv[4] = {0, 0, 1, 1};
         if (b && b->tex) {
             id<MTLTexture> src = raw_view(b->tex);
             // Dynamic: the image occupies the top-left part of the texture (its contents' scale over the allocation's)
@@ -1349,8 +1367,11 @@ void backend_present_now(NvnTexture *t, uint64_t frame) {
             [enc setFragmentTexture:src atIndex:0];
             [enc setFragmentSamplerState:present_sampler atIndex:0];
             [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+            scene = src;
+            memcpy(scene_uv, crop, sizeof scene_uv);
         }
         [enc endEncoding];
+        menu_set_scene(scene, scene_uv);
         static long menu_at = -1;  // test hook: open the menu at this frame (LARECOMP_MENU_AT)
         if (menu_at < 0) menu_at = getenv("LARECOMP_MENU_AT") ? atol(getenv("LARECOMP_MENU_AT")) : 0;
         if (menu_at && (long)frame + 1 == menu_at) { extern void menu_test_open(void); menu_test_open(); }

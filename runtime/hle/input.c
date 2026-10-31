@@ -241,13 +241,14 @@ void input_reset(void) {
 
 volatile int g_debug_frame_request;  // F9: dump the next frame's passes (build/pass_*.png) + draw log
 
-// Events a test pushes (LARECOMP_HOST_INPUT type: / sdlkey: / sdlpad: / mouse:) carry this device id: they go the whole way, menu first.
+// Events a test pushes (LARECOMP_HOST_INPUT type: / sdlkey: / sdlpad: / sdlaxis: / mouse:) carry this device id: they go the whole way, menu first.
 #define TEST_DEVICE 0x7E57u
 static bool test_event(const SDL_Event *e) {
     switch (e->type) {
     case SDL_EVENT_KEY_DOWN: case SDL_EVENT_KEY_UP: return e->key.which == TEST_DEVICE;
     case SDL_EVENT_TEXT_INPUT: return e->text.windowID == TEST_DEVICE;
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN: case SDL_EVENT_GAMEPAD_BUTTON_UP: return e->gbutton.which == TEST_DEVICE;
+    case SDL_EVENT_GAMEPAD_AXIS_MOTION: return e->gaxis.which == TEST_DEVICE;
     case SDL_EVENT_MOUSE_MOTION: return e->motion.which == TEST_DEVICE;
     case SDL_EVENT_MOUSE_BUTTON_DOWN: case SDL_EVENT_MOUSE_BUTTON_UP: return e->button.which == TEST_DEVICE;
     default: return false;
@@ -380,13 +381,39 @@ int input_menu_family(SDL_JoystickID which) {
     return bind_label_family();
 }
 
+// The game reads one controller: the one the player is using (#455: a two-port adapter is two gamepads, and the
+// working controller may be in port 2). Every connected gamepad is open, so its events arrive; a button press on
+// another one makes it the game's, and so does a stick or trigger pushed well past drift while the game's own is at
+// rest (a noisy idle stick can't take it from a player who's playing). The light and rumble go with it.
+static bool pad_at_rest(void) {
+    int32_t lx = pad_lx, ly = pad_ly, rx = pad_rx, ry = pad_ry;
+    return !pad_buttons && abs(lx) < 8000 && abs(ly) < 8000 && abs(rx) < 8000 && abs(ry) < 8000;
+}
+static void use_pad(SDL_JoystickID id, const char *why) {
+    SDL_Gamepad *g = SDL_GetGamepadFromID(id);
+    if (!g || g == pad) return;
+    if (pad) {
+        led_restore("controller changed");
+        SDL_RumbleGamepad(pad, 0, 0, 0);
+        rumble_last_lo = rumble_last_hi = 0, rumble_warned = false;  // (the next poll starts it on the new one)
+    }
+    pad = g;
+    LOG("[input] gamepad: %s%s\n", SDL_GetGamepadName(pad), why);
+    note_family();
+    recompute_pad();
+}
+static void open_pad(SDL_JoystickID id) {
+    if (!SDL_GetGamepadFromID(id)) SDL_OpenGamepad(id);
+    if (!pad) use_pad(id, "");
+}
+
 void input_handle_event(const SDL_Event *e) {
     static bool scanned;  // pads present at startup: their ADDED event may have gone to the start screen's loop
     if (!scanned) {
         scanned = true;
         int n = 0;
         SDL_JoystickID *ids = SDL_GetGamepads(&n);
-        if (n > 0 && !pad) { pad = SDL_OpenGamepad(ids[0]); LOG("[input] gamepad: %s\n", SDL_GetGamepadName(pad)); note_family(); }
+        for (int i = 0; ids && i < n; i++) open_pad(ids[i]);
         SDL_free(ids);
     }
     switch (e->type) {
@@ -400,18 +427,31 @@ void input_handle_event(const SDL_Event *e) {
         break;
     }
     case SDL_EVENT_GAMEPAD_ADDED:
-        if (!pad) { pad = SDL_OpenGamepad(e->gdevice.which); LOG("[input] gamepad: %s\n", SDL_GetGamepadName(pad)); note_family(); }
+        open_pad(e->gdevice.which);
         break;
-    case SDL_EVENT_GAMEPAD_REMOVED:
-        if (pad && SDL_GetGamepadID(pad) == e->gdevice.which) {
+    case SDL_EVENT_GAMEPAD_REMOVED: {
+        SDL_Gamepad *g = SDL_GetGamepadFromID(e->gdevice.which);
+        if (g && g == pad) {
             SDL_RumbleGamepad(pad, 0, 0, 0);
-            SDL_CloseGamepad(pad); pad = NULL; note_family();
+            pad = NULL;
             led_forget();  // (gone: it shows its own colour when it comes back)
             rumble_clear(); rumble_last_lo = rumble_last_hi = 0; rumble_warned = false;
         }
+        if (g) SDL_CloseGamepad(g);
+        if (!pad) {  // another one still connected takes over
+            int n = 0;
+            SDL_JoystickID *ids = SDL_GetGamepads(&n);
+            for (int i = 0; ids && i < n && !pad; i++)
+                if (ids[i] != e->gdevice.which) open_pad(ids[i]);
+            SDL_free(ids);
+            note_family();
+        }
         recompute_pad();
         break;
+    }
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN: case SDL_EVENT_GAMEPAD_BUTTON_UP:
+        if (e->gbutton.down && e->gbutton.which != TEST_DEVICE && !host_test) use_pad(e->gbutton.which, " (switched)");
+        if (pad && e->gbutton.which != TEST_DEVICE && e->gbutton.which != SDL_GetGamepadID(pad)) break;  // (another pad)
         if (!host_test || e->gbutton.which == TEST_DEVICE) {  // (the press as the event has it, before reading the pad)
             uint64_t b = pad_bits(e->gbutton.button);
             note_press(e->gbutton.down ? b : 0, e->gbutton.down ? 0 : b);
@@ -419,6 +459,8 @@ void input_handle_event(const SDL_Event *e) {
         recompute_pad();
         break;
     case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+        if (!host_test && abs(e->gaxis.value) > 24000 && pad_at_rest()) use_pad(e->gaxis.which, " (switched)");
+        if (pad && e->gaxis.which != SDL_GetGamepadID(pad)) break;  // (another pad's stick: not the game's)
         if ((e->gaxis.axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER || e->gaxis.axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) &&
             !host_test) {  // (the triggers as buttons: past half way)
             static bool trig[2];
@@ -449,6 +491,8 @@ static _Atomic int32_t script_lx, script_ly, script_rx, script_ry;
 //   entry first like a player's typing; "{Escape}" (any SDL key name) presses that key. No ',' or ':' in <text>.
 // "frame:sdlpad:<button>:frames" / "frame:sdlkey:<key>:frames" hold a controller button / key as real events (down
 //   at frame, up `frames` later): they reach menus and the on-screen keyboard first, as a player's would.
+// "frame:sdlaxis:<axis>=<value>:frames" holds a controller axis (SDL name: righty, leftx...; raw units, -32768..32767,
+//   y down) as real events, back to 0 `frames` later.
 // "frame:mouse:<dx>/<dy>" moves the mouse by that many points, "frame:mouse:click" clicks it (real events).
 // "frame:shot:<name>" saves the window (game + menus) to build/<name>.png.
 // "frame:resize:<W>x<H>" resizes the window to W x H points (menu_apply_window_requests: the main thread).
@@ -500,6 +544,17 @@ static void test_push(uint64_t frame, unsigned long start, unsigned long len, co
     }
     if (!strcmp(dev, "sdlkey")) {
         if (frame == start || frame == start + len) push_key(SDL_GetScancodeFromName(arg), SDL_KMOD_NONE, frame == start);
+        return;
+    }
+    if (!strcmp(dev, "sdlaxis")) {  // <axis>=<value>, e.g. righty=24000: held for len frames, then back to 0
+        char an[32] = "";
+        int v = 0;
+        if ((frame != start && frame != start + len) || sscanf(arg, "%31[a-z]=%d", an, &v) != 2) return;
+        SDL_GamepadAxis ax = SDL_GetGamepadAxisFromString(an);
+        if (ax == SDL_GAMEPAD_AXIS_INVALID) return;
+        e.type = SDL_EVENT_GAMEPAD_AXIS_MOTION;
+        e.gaxis.which = TEST_DEVICE, e.gaxis.axis = (Uint8)ax, e.gaxis.value = (Sint16)(frame == start ? v : 0);
+        SDL_PushEvent(&e);
         return;
     }
     if (!strcmp(dev, "sdlpad")) {
@@ -556,7 +611,7 @@ static void host_test_frame(uint64_t frame) {
             unsigned long start = 0, len = 10;
             char dev[8] = "", name[400] = "";
             if (sscanf(tok, "%lu:%7[a-z]:%399[^:]:%lu", &start, dev, name, &len) < 3) continue;
-            if (!strcmp(dev, "type") || !strcmp(dev, "sdlpad") || !strcmp(dev, "sdlkey") || !strcmp(dev, "shot") ||
+            if (!strcmp(dev, "type") || !strcmp(dev, "sdlpad") || !strcmp(dev, "sdlaxis") || !strcmp(dev, "sdlkey") || !strcmp(dev, "shot") ||
                 !strcmp(dev, "resize") || !strcmp(dev, "mouse")) {
                 test_push(frame, start, len, dev, name);
                 continue;
@@ -700,6 +755,8 @@ static void fill_state(Cpu *c) {
       pot_bush_game_tick(c, renderer_present_count());
       extern void shell_spots_tick(Cpu *c, uint64_t frame);
       shell_spots_tick(c, renderer_present_count());
+      extern void apple_trees_tick(Cpu *c, uint64_t frame);
+      apple_trees_tick(c, renderer_present_count());
       extern void qol_tick(void);
       qol_tick();
       extern void run_timer_tick(void);

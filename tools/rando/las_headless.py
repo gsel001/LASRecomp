@@ -67,7 +67,8 @@ sys.modules['PySide6'] = pyside
 sys.modules['PySide6.QtCore'] = qtcore
 
 ARGS = [os.path.abspath(a) for a in sys.argv[1:4]]
-_RERUN = [sys.executable] + ([] if getattr(sys, 'frozen', False) else [os.path.abspath(__file__)]) + ARGS + sys.argv[4:]  # (retry_layout)
+ORIG_ARGV = ARGS + sys.argv[4:]  # (a re-run with the next room layout: las_headless.main)
+SELF = os.path.abspath(__file__)  # (before the chdir below)
 sys.argv[0] = os.path.join(LAS, 'randomizer.py')  # LAS resolves its data paths from argv[0]
 sys.path.insert(0, LAS)
 os.chdir(LAS)
@@ -104,6 +105,7 @@ def default_settings(seed):
         'digs': False,  # digsanity: every diggable overworld tile is a check (tools/rando/digs.py)
         'shellsanity': False,  # every Secret Seashell spot is a check (tools/rando/seashell_spots.py); off: vanilla
         'hookshot-anything': False,  # the hookshot latches onto anything (tools/rando/hookshot_logic.py)
+        'fast-egg': False,  # the Egg's first drop lands at the boss, no maze (tools/rando/fast_egg.py)
         'dungeon-room-shuffle': 'off',  # off / coupled / decoupled (tools/rando/dungeon_gen.py; ROOM_MODES)
         'dungeon-labyrinth': False,  # with room shuffle: every dungeon a wing of one Labyrinth (tools/rando/labyrinth.py)
         'pet-rooster': False, 'pet-ghost': False, 'open-desert': True,  # pets (tools/rando/pets.py)
@@ -228,6 +230,9 @@ def main():
     if settings.get('hookshot-anything'):  # new routes before anything reads the logic (room shuffle, entrances)
         import hookshot_logic
         print('hookshot anything:', hookshot_logic.apply(logic_defs), 'routes', flush=True)
+    import eagle_tower  # room shuffle: Eagle's Tower starts collapsed (its flags: player_start.py; tools/rando/eagle_tower.py)
+    if eagle_tower.collapsed(settings):
+        print("eagle's tower collapsed:", eagle_tower.apply_logic(logic_defs), 'conditions', flush=True)
 
     # keysanity: the freed dungeon items must be placed with logic (LAS only logic-checks 'important' items)
     ks_free = {'keys': ('key-',), 'keys+nk': ('key-', 'nightmare-key-'),
@@ -251,7 +256,8 @@ def main():
         with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'entrance_data.yml')) as f:
             entrance_data = yaml.safe_load(f)
         import random as _rnd
-        pot_locs, skipped = pots_mod.add_to_logic(pots_mod.scan(romfs, leb), logic_defs, item_defs, entrance_data,
+        missable = eagle_tower.MISSABLE_ROOMS_COLLAPSED if eagle_tower.collapsed(settings) else pots_mod.MISSABLE_ROOMS
+        pot_locs, skipped = pots_mod.add_to_logic(pots_mod.scan(romfs, leb, missable), logic_defs, item_defs, entrance_data,
                                                   settings.get('traps', 'none'), _rnd.Random(f"{settings['seed']}-pots"))
         print('pots:', len(pot_locs), 'locations', ('(no logic for: ' + ', '.join(sorted(skipped)) + ')') if skipped else '',
               flush=True)
@@ -264,12 +270,29 @@ def main():
                                             settings.get('traps', 'none'), _rnd.Random(f"{settings['seed']}-bushes"))
         print('bushes:', len(bush_locs), 'locations', flush=True)
 
+    rock_locs = {}
+    if settings.get('rocks'):  # rocksanity: every overworld rock hides an item (tools/rando/rocks.py)
+        import rocks as rocks_mod
+        import random as _rnd
+        rocks_found = rocks_mod.scan(romfs, leb, settings.get('classic-d2'), settings.get('open-mabe'))
+        rock_locs = rocks_mod.add_to_logic(rocks_found, logic_defs, item_defs, settings.get('traps', 'none'),
+                                           _rnd.Random(f"{settings['seed']}-rocks"))
+        print('rocks:', len(rock_locs), 'locations', flush=True)
+
     dig_locs, dig_tiles = {}, []
     if settings.get('digs'):  # digsanity: every diggable overworld tile is a check (tools/rando/digs.py)
         import digs as digs_mod
         dig_tiles = digs_mod.scan(romfs, leb)
         dig_locs = digs_mod.add_to_logic(dig_tiles, logic_defs, item_defs)
         print('digs:', len(dig_locs), 'locations of', len(dig_tiles), 'dig tiles', flush=True)
+
+    apple_locs = {}
+    if settings.get('apples'):  # Applesanity: 3 checks in each overworld apple tree (tools/rando/apple_trees.py)
+        import apple_trees
+        import random as _rnd
+        apple_locs = apple_trees.add_to_logic(apple_trees.scan(romfs, leb), logic_defs, item_defs,
+                                              settings.get('traps', 'none'), _rnd.Random(f"{settings['seed']}-apples"))
+        print('apple trees:', len(apple_locs), 'locations', flush=True)
 
     import shopsanity
     import trendsanity
@@ -328,8 +351,9 @@ def main():
         def with_caves(cv):
             lg = copy.deepcopy(logic_defs)
             n = el.apply_connector_logic(lg, ed, *cv, cextra) if cv[0] else 0
-            # a bush / dig tile in a pocket (its door's screen, or its tiles on the screens beside it) needs it
-            for name, b in list(bush_locs.items()) + list(dig_locs.items()):
+            # a bush / dig / apple tree / rock tile in a pocket (its door's screen, or its tiles on the screens beside it) needs it
+            for name, b in list(bush_locs.items()) + list(dig_locs.items()) + list(rock_locs.items()) + \
+                    [(n, {'room': t['room'], 'tile': t['tile']}) for n, (t, _) in apple_locs.items()]:
                 pk = cv[0] and name in lg and pocket_at(b['room'], b.get('tile'))
                 if pk:
                     lg[name]['condition-basic'] = el._and(lg[name].get('condition-basic'), pk)
@@ -373,9 +397,9 @@ def main():
         extra = {name: p['room'] for name, p in pot_locs.items() if p.get('room')}
         base = (copy.deepcopy(logic_defs), copy.deepcopy(item_defs), copy.deepcopy(settings))
         layouts = jumps = None
-        # a layout whose dungeons can't be filled: the next one (same seed ID, same result); LARECOMP_ROOM_ATTEMPT: the
-        # first layout to try (retry_layout below: the item shuffle failed on the ones before)
-        for attempt in range(int(os.environ.get('LARECOMP_ROOM_ATTEMPT', 0)), 40):
+        # (LARECOMP_ROOM_ATTEMPT: the first layout to try - set when a layout's item fill got stuck, see below)
+        first = int(os.environ.get('LARECOMP_ROOM_ATTEMPT', 0))
+        for attempt in range(first, 40):  # a layout whose dungeons can't be filled: the next one (same seed ID, same result)
             sub = settings['seed'] if attempt == 0 else f"{settings['seed']}~{attempt}"
             lab = None
             if lab_on:  # (Labyrinth: one shuffled dungeon of every dungeon, each mode keeping its pairing rules)
@@ -427,7 +451,9 @@ def main():
             sys.exit(0)
     if 'mini' in soul_kinds:  # mini-boss rooms of vanilla-layout dungeons: what lies behind needs the soul
         import dungeon_gen
-        vanilla = [lv for lv in dungeon_gen.ENTRANCES if not room_plan or lv not in room_plan[0]]
+        # (Eagle's Tower keeps LAS's own logic when it isn't shuffled: no room graph for the uncollapsed tower)
+        vanilla = [lv for lv in dungeon_gen.ENTRANCES if (not room_plan or lv not in room_plan[0])
+                   and lv != 'Lv07EagleTower']
         print('mini-boss souls on vanilla dungeons:', souls_mod.vanilla_gate(
             soul_cat, romfs, logic_defs, vanilla, {n: p['room'] for n, p in pot_locs.items() if p.get('room')}),
             'conditions', flush=True)
@@ -439,7 +465,8 @@ def main():
             return
         print(f'room layout {room_attempt + 1}: {why} - planning another', flush=True)
         import subprocess
-        sys.exit(subprocess.run(_RERUN, env=dict(os.environ, LARECOMP_ROOM_ATTEMPT=str(room_attempt + 1))).returncode)
+        cmd = [sys.executable] + ([] if getattr(sys, 'frozen', False) else [SELF]) + ORIG_ARGV
+        sys.exit(subprocess.run(cmd, env=dict(os.environ, LARECOMP_ROOM_ATTEMPT=str(room_attempt + 1))).returncode)
 
     result = {}
     errors = []
@@ -501,6 +528,13 @@ def main():
     sh.give_placements.connect(lambda p: result.update(placements=p[0], randstate=p[1]))
     sh.error.connect(lambda e: errors.append(e))
     sh.start()
+    if room_plan and any('fill stuck:' in str(e) for e in errors) and room_attempt + 1 < 40:
+        # (the layout leaves too few early locations for the items - shuffler.FILL_STUCK: the next layout, in a fresh
+        # process, as if this one had been found unfillable while planning; its output and exit status are ours)
+        print(f'room layout {room_attempt}: item fill stuck - planning another', flush=True)
+        import subprocess
+        cmd = [sys.executable] + ([] if getattr(sys, 'frozen', False) else [SELF]) + ORIG_ARGV
+        sys.exit(subprocess.run(cmd, env=dict(os.environ, LARECOMP_ROOM_ATTEMPT=str(room_attempt + 1))).returncode)
     if errors or 'placements' not in result:
         for e in errors:  # (a reason the player can act on: shown by the Randomizer tab - 'error <text>' lines)
             m = re.search(r'RuntimeError: (Triforce hunt: .*)', str(e))
@@ -549,6 +583,10 @@ def main():
     import hint_sheet  # the Hint Sheet's steps: progression items in playthrough order
     print('hint sheet steps:', hint_sheet.steps(sh.logic_defs, pl, settings, lambda k, acc: sh.checkAccess(k, acc, settings['logic']),
                                                 sph, out_dir), flush=True)
+    if settings.get('hints'):  # owl statues and phone booths (tools/rando/seed_hints.py)
+        import seed_hints
+        print('hints:', seed_hints.pick(sh.logic_defs, pl, settings, lambda k, acc: sh.checkAccess(k, acc, settings['logic']),
+                                        out_dir, ent, romfs, room_plan and room_plan[0]), flush=True)
     for k in [k for k, v in sh.logic_defs.items() if v.get('_check_only')]:
         del sh.logic_defs[k]
     missing = [i for i in playthrough.INSTRUMENTS + ['kill-nightmare'] if not access.get(i)]
@@ -575,7 +613,8 @@ def main():
     if os.environ.get('LARECOMP_CHECK_ONLY'):  # (test: tools/rando/seed_sweep.py - placements + logic, no game files)
         with open(os.path.join(out_dir, 'placements.json'), 'w') as f:  # (an unbeatable one's too: to look into)
             json.dump({'placements': {k: v for k, v in pl.items() if isinstance(v, str)},
-                       'access': {k: 1 for k, v in settings.items() if v is True}}, f)
+                       'access': {k: 1 for k, v in settings.items() if v is True},
+                       **({'room-plan': {'layouts': room_plan[0], 'jumps': room_plan[1]}} if room_plan else {})}, f)
     if missing:
         retry_layout(f'unbeatable ({", ".join(missing[:3])})')
         print('SHUFFLE ERROR unbeatable seed', missing, file=sys.stderr)
@@ -583,7 +622,7 @@ def main():
     if os.environ.get('LARECOMP_CHECK_ONLY'):
         sys.exit(0)
 
-    if pot_locs or bush_locs or dig_locs:  # bomb / powder / arrow refills anywhere: only once owned, else a blue rupee (runtime)
+    if pot_locs or bush_locs or dig_locs or rock_locs:  # bomb / powder / arrow refills anywhere: only once owned, else a blue rupee (runtime)
         import pots as _pots
         print('pot refills marked:', _pots.mark_refills(result['placements']), flush=True)
     pl = result['placements']
@@ -594,6 +633,9 @@ def main():
         print('pets placed:', pets_mod.mark_indexes(result['placements'], logic_defs), flush=True)
     from RandomizerCore.Randomizers import item_get as _item_get
     _item_get.GHOST_PET = 'ghost' in pets
+    if settings.get('chest-looks'):  # chest colour shows what's inside (tools/rando/chest_looks.py)
+        import chest_looks
+        print('chest looks:', chest_looks.install(result['placements'], item_defs, sh.logic_defs, settings), flush=True)
     mods = ModsProcess(result['placements'], romfs, out_dir, item_defs, settings['seed'], result['randstate'])
     last = [0]
 
@@ -651,6 +693,15 @@ def main():
             f.write('Bushes:\n' + '\n'.join(lines) + '\n')
         print('bushes placed:', len(lines), flush=True)
         print('bushes.tsv:', bushes_mod.write_tsv(out_dir, leb), flush=True)
+    if rock_locs:
+        from RandomizerCore.Tools import event_tools, oead_tools
+        from RandomizerCore.Randomizers import item_get, data as las_data
+        stage('Hiding items under rocks', 0.945)
+        lines = rocks_mod.apply(rock_locs, mods, out_dir, romfs, leb, event_tools, oead_tools, item_get, las_data)
+        with open(os.path.join(out_dir, f'rocks_{settings["seed"]}.txt'), 'w') as f:
+            f.write('Rocks:\n' + '\n'.join(lines) + '\n')
+        print('rocks placed:', len(lines), flush=True)
+        print('rocks.tsv:', rocks_mod.write_tsv(out_dir, leb), flush=True)
     if ent:
         lvl_out = os.path.join(out_dir, 'romfs', 'region_common', 'level')
 
@@ -691,7 +742,9 @@ def main():
 
     import escape_bottle  # Tarin gives it with the starting items, in the game's own get-item message box
     print('escape bottle:', escape_bottle.apply(out_dir, romfs), flush=True)
-    print('hint sheet:', hint_sheet.apply(out_dir, romfs, settings), flush=True)  # (after it: Tarin's next gift)
+    print('hint sheet:', hint_sheet.apply(out_dir, romfs, settings, ent, sh.logic_defs), flush=True)  # (after it: Tarin's next gift)
+    if settings.get('hints'):
+        print('hints:', seed_hints.apply(out_dir, romfs, settings), flush=True)
 
     if soul_kinds:  # where the souls' fairy models stand (after the rooms moved): drawn red there (souls.c)
         print('soul spots:', souls_mod.write_spots(out_dir, leb, result['placements']), flush=True)
@@ -719,6 +772,9 @@ def main():
                                                             digs_mod.SHELLS if dig_locs else (),
                                                             vanilla=not settings.get('shellsanity'))) or '(vanilla)',
           flush=True)
+    if apple_locs:  # (after the seashell spots: the same flow file)
+        print('apple trees:', ', '.join(apple_trees.apply(apple_locs, mods, out_dir, romfs, _uw_leb, _uw_ev, _ot,
+                                                           _uw_get, _uw_data)), flush=True)
     import keysanity_text  # (after every flow edit, digs / underwater too) a dungeon item outside its dungeon names it
     keysanity_text.apply(out_dir, romfs, result['placements'], labyrinth=settings.get('dungeon-labyrinth'))
     if settings.get('dungeon-labyrinth'):  # (the dungeon map's title / the title on entering: 'Labyrinth - Wing 2')
@@ -738,7 +794,7 @@ def main():
                                                    bool(settings.get('enemy-minibosses')),
                                                    (settings['miniboss-marker-flag'], miniboss_guard.ANYWHERE)
                                                    if 'miniboss-marker-flag' in settings else None), flush=True)
-    if pot_locs or bush_locs or dig_locs:  # (after every flow edit) refills at real checks are refills, not the item
+    if pot_locs or bush_locs or dig_locs or rock_locs:  # (after every flow edit) refills at real checks are refills, not the item
         import refill_gets
         print('refill gets:', refill_gets.apply(out_dir, romfs, settings), flush=True)
     import bomb_bag_text  # (after every flow edit, digs too) found bombs: "You found your Bomb Bag!"
@@ -747,6 +803,12 @@ def main():
     print('powder bag text:', powder_bag_text.apply(out_dir, romfs, settings), flush=True)
     import silent_pickups  # (the last flow edit) minor ground items: no item-get cutscene, a sound and a card instead
     print('silent pickups: %d gives, %d native get flows' % silent_pickups.apply(out_dir, romfs), flush=True)
+    if settings.get('chest-looks'):  # (every room edit done) the recoloured chests; no chest without a model
+        print('chest looks:', chest_looks.write_models(out_dir, romfs), 'models,',
+              chest_looks.sweep(out_dir, romfs, _uw_leb), 'chests fixed', flush=True)
+    if settings.get('fast-egg'):
+        import fast_egg
+        print('fast egg:', fast_egg.apply(out_dir, romfs, _uw_leb), flush=True)
     import room_links  # (every room edit done: actors' links within each room must still be sound)
     problems = room_links.check(out_dir, _uw_leb, romfs)
     if problems:

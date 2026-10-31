@@ -39,7 +39,7 @@ NAMES = {
     'kanalet-final-guard': 'Kanalet Castle: last guard', 'kanalet-kill-room': 'Kanalet Castle: fight room',
     'kanalet-mad-bomber': 'Kanalet Castle: Mad Bomber', 'kanalet-moat-north': 'Kanalet moat, north (sunken)',
     'kanalet-moat-south': 'Kanalet moat, south (sunken)', 'kanalet-south-cave': 'Cave south of Kanalet Castle',
-    'kiki': 'Kiki the monkey', 'lanmola': 'Lanmola (Yarna Desert)', 'mabe-bushes': 'Bushes in Mabe Village',
+    'kiki': 'Kiki the monkey', 'lanmola': 'Lanmola (Yarna Desert)', 'mabe-bushes': 'Seashell bush in Mabe Village',
     'mabe-well': 'Mabe Village well', 'mad-batter-bay': "Mad Batter, Martha's Bay",
     'mad-batter-taltal': 'Mad Batter, Tal Tal', 'mad-batter-woods': 'Mad Batter, Mysterious Forest',
     'mamasha': 'Mamasha (trade)', 'mamu': 'Mamu (song)', 'manbo': 'Manbo (song)', 'marin': 'Marin (song)',
@@ -79,7 +79,7 @@ NAMES = {
     'woods-north-cave-loose': 'Forest north cave, item', 'woods-north-chest': 'Mysterious Forest, north chest',
     'woods-south-chest': 'Mysterious Forest, south chest', 'woods-west-dig': 'Mysterious Forest, west (dig)',
 }
-KIND_WORD = {'bush': 'Bush', 'dig': 'Dig spot', 'pot': 'Pot'}
+KIND_WORD = {'bush': 'Bush', 'dig': 'Dig spot', 'pot': 'Pot', 'apple': 'Apple tree', 'rock': 'Rock'}
 # interiors holding pots (potsanity), by level
 HOUSES = {'MarinTarinHouse': "Marin and Tarin's house", 'DrWrightHouse': "Mr. Write's house",
           'MadamHouse': "Madam MeowMeow's house", 'QuadupletHouse': "the quadruplets' house",
@@ -109,7 +109,7 @@ def direction(fx, fz):
 
 
 def display_name(name, kind=None, area=None, where=None):
-    """name: the LAS location; kind: bush / dig / pot for the randomizer's numbered checks; area: the place name it
+    """name: the LAS location; kind: bush / dig / pot / apple for the randomizer's numbered checks; area: the place name it
     is in; where: a compass word inside that area (or a room / house name)."""
     if name in NAMES:
         return NAMES[name]
