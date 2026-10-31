@@ -869,14 +869,14 @@ static void rows_companions(void) {
 }
 
 static void rows_fun(void) {
+    opt_toggle("Weather cycle", &g_opts.weather_cycle, false,
+               "The overworld weather changes on its own: sunny, then rain or snow, then a storm or blizzard, and back. "
+               "Lightning can shock Link and blizzard winds push him.");
     opt_toggle("Randomize music", &g_opts.randomize_music, false, "Shuffles the game's music.");
     opt_toggle("Randomize Cosmetics", &g_opts.random_cosmetics, false, "Randomizes cosmetics to the seed.");
     opt_toggle("Randomized Game Environments", &g_opts.environments, false,
                "The game has many built-in room shaders, like the desert, the Egg and the Mysterious Woods, some of them "
                "unused. The seed gives each area a random one.");
-    opt_toggle("Weather cycle", &g_opts.weather_cycle, false,
-               "The overworld weather changes on its own: sunny, then rain or snow, then a storm or blizzard, and back. "
-               "Lightning can shock Link and blizzard winds push him.");
 }
 
 static void rows_other(void) {
