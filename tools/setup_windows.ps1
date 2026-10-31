@@ -28,7 +28,7 @@ if ($arm) {
     if (-not (Test-Path $py)) {
         $exe = "$env:TEMP\python-3.12.10-amd64.exe"
         Invoke-WebRequest https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe -OutFile $exe
-        if ((Get-AuthenticodeSignature $exe).Status -ne 'Valid') { throw "$exe: not validly signed" }
+        if ((Get-AuthenticodeSignature $exe).Status -ne 'Valid') { throw "${exe}: not validly signed" }
         Start-Process $exe -Wait -ArgumentList '/quiet', 'InstallAllUsers=0', 'PrependPath=0', 'Include_launcher=0',
             'Include_test=0', "TargetDir=$(Split-Path $py)"
     }

@@ -310,6 +310,17 @@ jobs:
         shell: pwsh
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
+      # (Windows PowerShell 5.1, what the setup instructions run: a parse error stops the whole script)
+      - name: PowerShell scripts parse
+        shell: powershell
+        run: |
+          $bad = 0
+          foreach ($f in Get-ChildItem tools\*.ps1) {
+            $err = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$err)
+            foreach ($e in $err) { Write-Host "::error file=tools/$($f.Name),line=$($e.Extent.StartLineNumber)::$($e.Message)"; $bad = 1 }
+          }
+          exit $bad
       # MSYS2 UCRT64 with the packages tools/setup_windows.ps1 installs (minus the debugger / validation layers),
       # binutils for windres (the exe's icon), git for tools/test_translate.sh
       - uses: msys2/setup-msys2@v2
