@@ -1,5 +1,5 @@
 # Experimental builds, a rolling pre-release for experimental platforms: ones that aren't official but are available
-# for testing (Linux aarch64; Windows on ARM later). From 1.0.0 they are never on the normal releases. Each build goes on the rolling pre-release "experimental", replacing that platform's previous file,
+# for testing (Linux aarch64, Windows on ARM). From 1.0.0 they are never on the normal releases. Each build goes on the rolling pre-release "experimental", replacing that platform's previous file,
 # or, for a reporter testing a fix, on a test build of its own. None of the files holds game code or game files.
 # Run by pushing a tag at the commit to build (from any branch that has this file):
 #   experimental-<anything>  -> the rolling "experimental" release; the pushed tag is deleted after the upload
@@ -123,8 +123,84 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+  # the same build as release.yml's Windows job, natively on an arm64 runner (MSYS2 CLANGARM64); the generator
+  # helpers are built with an x64 Python and run under emulation (capstone / unicorn have no ARM64 Windows wheels)
+  windows:
+    needs: check
+    runs-on: windows-11-arm
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: LF line endings, as tools/setup_windows.ps1 sets for clones
+        shell: pwsh
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.check.outputs.sha }}
+      - uses: actions/setup-python@v5
+        id: py
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANGARM64
+          update: true
+          install: make git curl tar xz diffutils zip unzip
+          pacboy: clang:p lld:p sdl3:p vulkan-devel:p shaderc:p spirv-tools:p pkgconf:p vulkan-memory-allocator:p
+      - name: Experimental version
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+          STAMP: ${{ needs.check.outputs.stamp }}
+        run: |
+          F=runtime/ui/launcher.mm
+          sed -i "s/^#define LARECOMP_VERSION \".*\"/#define LARECOMP_VERSION \"$VERSION\"/; s/^#define LARECOMP_EXPERIMENTAL_STAMP .*/#define LARECOMP_EXPERIMENTAL_STAMP ${STAMP}LL/" $F
+          grep -q "^#define LARECOMP_VERSION \"$VERSION\"" $F && grep -q "^#define LARECOMP_EXPERIMENTAL_STAMP ${STAMP}LL" $F ||
+            { echo "::error::$F: LARECOMP_VERSION / LARECOMP_EXPERIMENTAL_STAMP not set"; exit 1; }
+      - name: Deps cache
+        id: deps
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/deps-win
+            !build/deps-win/src
+          key: deps-windows-arm64-${{ hashFiles('tools/build_deps_windows.sh') }}
+      - name: Deps (LGPL FFmpeg)
+        run: make deps-windows
+      - uses: actions/cache/save@v4
+        if: steps.deps.outputs.cache-hit != 'true'
+        with:
+          path: |
+            build/deps-win
+            !build/deps-win/src
+          key: ${{ steps.deps.outputs.cache-primary-key }}
+      - name: Generator helpers
+        run: |
+          PY=$(cygpath -u '${{ steps.py.outputs.python-path }}')
+          make rando-helper RANDO_PY="$PY" && make gen-helper RANDO_PY="$PY"
+      - name: Compiler for the player's machine
+        run: tools/fetch_zig.sh
+      - name: Zip
+        run: make -j"$(nproc)" dist
+      - name: No game files or generated C
+        run: |
+          D="build/dist/LAS Recomp"
+          bad=$(find "$D" -type d \( -name extracted -o -name 'generated*' -o -name exefs -o -name romfs \);
+                find "$D" -name '*.c' ! -path '*/zig/lib/*' ! -path '*/gamelib-src/gamelib_entry.c'; find "$D" -name 'lasgame*')
+          [ -z "$bad" ] || { echo "::error::must not ship: $bad"; exit 1; }
+          ls -la build/dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-arm64
+          path: build/dist/*.zip
+          if-no-files-found: error
+          compression-level: 0
+
   publish:
-    needs: [check, linux]
+    needs: [check, linux, windows]
+    # (a platform whose build failed keeps its previous file; the others still go up)
+    if: always() && needs.check.result == 'success' && (needs.linux.result == 'success' || needs.windows.result == 'success')
     runs-on: ubuntu-24.04
     permissions:
       contents: write  # (only here: the experimental / test-arm release)
@@ -155,6 +231,7 @@ jobs:
                 "The latest build for each platform is below. Each new build replaces the old one, and the game tells you on its start screen when a newer one is here." \
                 "" \
                 "- Linux aarch64 (ARM): \`linux-aarch64.AppImage\`" \
+                "- Windows on ARM: \`windows-arm64.zip\`" \
                 "" \
                 "## Help us make these better" \
                 "" \
@@ -163,7 +240,7 @@ jobs:
                 "To report, open an issue on the [issues page]($URL/issues) with your device, its graphics driver, screenshots of anything that looks wrong, and the log (\`lasrecomp.log\` in the data folder)." > notes.md
             else
               TITLE="Test build: ${RELEASE#test-}"
-              echo "Linux aarch64 test build from $SHA." > notes.md
+              echo "ARM test build from $SHA." > notes.md
             fi
             gh release create "$RELEASE" --prerelease --title "$TITLE" --notes-file notes.md --target "$SHA"
           fi
