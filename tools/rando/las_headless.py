@@ -387,7 +387,8 @@ def main():
     lab_on = room_mode != 'off' and bool(settings.get('dungeon-labyrinth'))
     settings['dungeon-labyrinth'] = lab_on
     lab_info = None
-    if lab_on and settings.get('shuffle-dungeons'):  # (the Labyrinth decides where each dungeon door leads)
+    if lab_on and settings.get('shuffle-dungeons'):  # (the Labyrinth decides where each dungeon door leads; tier 1
+        settings['shuffle-dungeons'] = False          # seed IDs turn it on above)
         print('labyrinth: dungeon entrance shuffle off (the Labyrinth picks where each dungeon door leads)', flush=True)
     if room_mode != 'off':
         stage('Planning dungeon rooms', 0.03)
