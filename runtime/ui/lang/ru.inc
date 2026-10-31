@@ -770,7 +770,7 @@
 {"Randomizes cosmetics to the seed.", "Внешний вид выбирается случайно по сиду."},
 {"Randomized Game Environments", "Случайное окружение"},
 {"Weather Cycle", "Смена погоды"},
-{"Adds a weather cycle to the overworld. Weather changes as you play, including storms that randomly strike the ground, shocking Link if he gets hit, and blizzards that slow Link down when the wind blows.", "Добавляет смену погоды на поверхности. Погода меняется по ходу игры: в грозу молнии бьют в случайные места и бьют Линка током, если попадут, а в метель ветер замедляет Линка."},
+{"Adds a weather cycle, including storm and blizzard hazards.", "Добавляет смену погоды с опасностями грозы и метели."},
 {"The game has many built-in room shaders, like the desert, the Egg and the Mysterious Woods, some of them unused. The seed gives each area a random one.", "В игре много встроенных шейдеров комнат — пустыни, Яйца, Таинственного леса и других, часть из них не используется. Сид дает каждой области случайный."},
 {"Hints", "Подсказки"},
 {"Owl statues and phone booths give hints.", "Статуи филина и телефонные будки дают подсказки."},

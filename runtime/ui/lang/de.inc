@@ -770,7 +770,7 @@
 {"Randomizes cosmetics to the seed.", "Wählt die Kosmetik passend zum Seed zufällig."},
 {"Randomized Game Environments", "Zufällige Umgebungen"},
 {"Weather Cycle", "Wetterwechsel"},
-{"Adds a weather cycle to the overworld. Weather changes as you play, including storms that randomly strike the ground, shocking Link if he gets hit, and blizzards that slow Link down when the wind blows.", "Fügt der Oberwelt einen Wetterwechsel hinzu. Das Wetter ändert sich beim Spielen: Gewitter, deren Blitze zufällig einschlagen und Link schocken, wenn sie ihn treffen, und Schneestürme, die Link bremsen, wenn der Wind weht."},
+{"Adds a weather cycle, including storm and blizzard hazards.", "Fügt einen Wetterwechsel hinzu, mit Gefahren durch Gewitter und Schneestürme."},
 {"The game has many built-in room shaders, like the desert, the Egg and the Mysterious Woods, some of them unused. The seed gives each area a random one.", "Das Spiel hat viele eingebaute Raum-Shader, etwa Wüste, Ei und Zauberwald, manche davon ungenutzt. Der Seed gibt jedem Gebiet einen zufälligen."},
 {"Hints", "Hinweise"},
 {"Owl statues and phone booths give hints.", "Uhu-Statuen und Telefonhäuschen geben Hinweise."},

@@ -870,8 +870,7 @@ static void rows_companions(void) {
 
 static void rows_fun(void) {
     opt_toggle("Weather Cycle", &g_opts.weather_cycle, false,
-               "Adds a weather cycle to the overworld. Weather changes as you play, including storms that randomly strike "
-               "the ground, shocking Link if he gets hit, and blizzards that slow Link down when the wind blows.");
+               "Adds a weather cycle, including storm and blizzard hazards.");
     opt_toggle("Randomize music", &g_opts.randomize_music, false, "Shuffles the game's music.");
     opt_toggle("Randomize Cosmetics", &g_opts.random_cosmetics, false, "Randomizes cosmetics to the seed.");
     opt_toggle("Randomized Game Environments", &g_opts.environments, false,

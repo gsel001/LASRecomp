@@ -770,7 +770,7 @@
 {"Randomizes cosmetics to the seed.", "Maakt het uiterlijk willekeurig volgens de seed."},
 {"Randomized Game Environments", "Willekeurige omgevingen"},
 {"Weather Cycle", "Weerwisseling"},
-{"Adds a weather cycle to the overworld. Weather changes as you play, including storms that randomly strike the ground, shocking Link if he gets hit, and blizzards that slow Link down when the wind blows.", "Voegt een weerwisseling toe aan de buitenwereld. Het weer verandert terwijl je speelt: onweer waarbij de bliksem willekeurig inslaat en Link raakt, en sneeuwstormen die Link afremmen als de wind waait."},
+{"Adds a weather cycle, including storm and blizzard hazards.", "Voegt een weerwisseling toe, met de gevaren van onweer en sneeuwstormen."},
 {"The game has many built-in room shaders, like the desert, the Egg and the Mysterious Woods, some of them unused. The seed gives each area a random one.", "Het spel heeft veel ingebouwde kamershaders, zoals die van de woestijn, het ei en het Dwaalwoud, waarvan sommige ongebruikt. De seed geeft elk gebied een willekeurige."},
 {"Hints", "Hints"},
 {"Owl statues and phone booths give hints.", "Uilenbeelden en telefoonbomen geven hints."},

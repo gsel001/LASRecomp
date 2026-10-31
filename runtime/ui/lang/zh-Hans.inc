@@ -770,7 +770,7 @@
 {"Randomizes cosmetics to the seed.", "按种子随机外观。"},
 {"Randomized Game Environments", "环境随机"},
 {"Weather Cycle", "天气循环"},
-{"Adds a weather cycle to the overworld. Weather changes as you play, including storms that randomly strike the ground, shocking Link if he gets hit, and blizzards that slow Link down when the wind blows.", "为野外加入天气循环。天气会随着游戏变化：暴风雨时闪电会随机落下，击中林克会让他触电；暴风雪时刮风会让林克变慢。"},
+{"Adds a weather cycle, including storm and blizzard hazards.", "加入天气循环，包括暴风雨和暴风雪的危险。"},
 {"The game has many built-in room shaders, like the desert, the Egg and the Mysterious Woods, some of them unused. The seed gives each area a random one.", "游戏内置了许多房间着色效果，比如沙漠、圣蛋和不可思议森林，其中一些没有用过。种子会为每个区域随机选一种。"},
 {"Hints", "提示"},
 {"Owl statues and phone booths give hints.", "猫头鹰石像和电话亭会给出提示。"},

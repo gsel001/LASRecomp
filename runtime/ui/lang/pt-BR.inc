@@ -771,7 +771,7 @@
 {"Randomizes cosmetics to the seed.", "Deixa o visual aleatório de acordo com a seed."},
 {"Randomized Game Environments", "Ambientes aleatórios"},
 {"Weather Cycle", "Ciclo do clima"},
-{"Adds a weather cycle to the overworld. Weather changes as you play, including storms that randomly strike the ground, shocking Link if he gets hit, and blizzards that slow Link down when the wind blows.", "Adiciona um ciclo do clima ao mundo externo. O clima muda enquanto você joga, com tempestades cujos raios caem ao acaso e eletrocutam o Link se o acertarem, e nevascas que deixam o Link mais lento quando o vento sopra."},
+{"Adds a weather cycle, including storm and blizzard hazards.", "Adiciona um ciclo do clima, com os perigos de tempestades e nevascas."},
 {"The game has many built-in room shaders, like the desert, the Egg and the Mysterious Woods, some of them unused. The seed gives each area a random one.", "O jogo tem vários shaders de sala embutidos, como o do deserto, do Ovo e da Floresta Misteriosa, alguns sem uso. A seed dá um aleatório para cada área."},
 {"Hints", "Dicas"},
 {"Owl statues and phone booths give hints.", "Estátuas de coruja e cabines telefônicas dão dicas."},

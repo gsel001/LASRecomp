@@ -770,7 +770,7 @@
 {"Randomizes cosmetics to the seed.", "シードに合わせて見た目をランダムにします。"},
 {"Randomized Game Environments", "ゲーム環境をランダムにする"},
 {"Weather Cycle", "天気の移り変わり"},
-{"Adds a weather cycle to the overworld. Weather changes as you play, including storms that randomly strike the ground, shocking Link if he gets hit, and blizzards that slow Link down when the wind blows.", "フィールドに天気の移り変わりを加えます。遊ぶうちに天気が変わり、嵐では雷がランダムに落ちてリンクに当たるとしびれ、吹雪では風が吹くとリンクの動きが遅くなります。"},
+{"Adds a weather cycle, including storm and blizzard hazards.", "嵐や吹雪の危険を含む、天気の移り変わりを加えます。"},
 {"The game has many built-in room shaders, like the desert, the Egg and the Mysterious Woods, some of them unused. The seed gives each area a random one.", "ゲームには砂漠や聖なるタマゴ、ふしぎの森など、部屋のシェーダーが多数組み込まれていて、中には未使用のものもあります。シードがエリアごとにランダムに割り当てます。"},
 {"Hints", "ヒント"},
 {"Owl statues and phone booths give hints.", "フクロウの石像と電話ボックスでヒントがもらえます。"},
