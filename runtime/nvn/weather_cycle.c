@@ -22,6 +22,9 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #include "../game_addresses.h"
 #include "../hle.h"
@@ -248,5 +251,11 @@ void weather_cycle_save_written(const char *path, uint64_t addr, int64_t off, in
     FILE *f = fopen(tmp, "wb");
     if (!f) return;
     bool ok = fwrite(&c, sizeof c, 1, f) == 1;
-    if (fclose(f) || !ok || rename(tmp, p)) { unlink(tmp); LOG("[weather] cycle: could not write %s\n", p); }
+    ok = !fclose(f) && ok;
+#ifdef _WIN32
+    ok = ok && MoveFileExA(tmp, p, MOVEFILE_REPLACE_EXISTING);  // (rename() won't replace a file there)
+#else
+    ok = ok && !rename(tmp, p);
+#endif
+    if (!ok) { unlink(tmp); LOG("[weather] cycle: could not write %s\n", p); }
 }
