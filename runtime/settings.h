@@ -19,11 +19,14 @@ enum { MENU_CONFIRM_GAME = 0, MENU_CONFIRM_CONTROLLER = 1 };
 enum { TIMER_POS_LEFT = 0, TIMER_POS_RIGHT = 1 };  // the run timer's corner (bottom left / right)
 enum { CHAOS_LETTERS_OFF = 0, CHAOS_LETTERS_EXPLORED = 1, CHAOS_LETTERS_MAP = 2 /* explored, all with the Map */ };
 // System language served to the game (runtime/services/am.c GetDesiredLanguage, services/hid_set.c GetLanguageCode):
-// the game picks its text language from it, as it would from the Switch's own system setting. LANG_AUTO follows the
-// host locale ($LC_ALL / $LC_MESSAGES / $LANG); the rest are the codes of the languages the game has text for.
-enum { LANG_AUTO = 0, N_LANGUAGES = 12 };
+// the game picks its text language from it, as it would from the Switch's own system setting, and the menus follow it
+// too (runtime/ui/i18n.mm). LANG_AUTO follows the host's language (macOS / Windows: the user's preferred languages;
+// Linux: $LC_ALL / $LC_MESSAGES / $LANG); the rest are the codes of the languages the game has text for.
+// The ones from N_GAME_LANGUAGES on are the menus' only (pt-BR): the game has no text for them and is told en-US.
+enum { LANG_AUTO = 0, N_GAME_LANGUAGES = 12, N_LANGUAGES = 13 };
 extern const char *const g_language_codes[N_LANGUAGES];  // what the game is told: "ja", "en-US", "es", ...
-extern const char *const g_language_names[N_LANGUAGES];  // for the menu ("Auto", "Japanese", ..., "Spanish")
+extern const char *const g_language_names[N_LANGUAGES];  // ("Auto", "Japanese", ..., "Spanish")
+extern const char *const g_language_endonyms[N_LANGUAGES];  // each in its own language, for the menu ("日本語", "Deutsch")
 
 enum { RANDO_PRESETS_MAX = 20 };  // (the Randomizer tab's own presets: settings.rando_presets)
 
@@ -114,7 +117,10 @@ extern int g_default_res_mode;  // RES_*: likewise
 // An integrated GPU (as settings_resolve_defaults was told): the fixed 1x renders 1280x720 there, what the game itself
 // picked on such a GPU (runtime/nvn/output_scale.c)
 extern bool g_gpu_integrated;
-// The language code to serve the game ("es", "en-US", ...): the setting, or the host locale for LANG_AUTO
+// The language code to serve the game ("es", "en-US", ...): the setting, or the host locale for LANG_AUTO (en-US for a
+// language of the menus only)
 const char *settings_language(void);
+// The menus' language code: the setting's, or the host locale's (pt-BR too, which the game itself doesn't have)
+const char *settings_menu_language(void);
 // That code's name for the menu ("Spanish")
 const char *settings_language_name(void);

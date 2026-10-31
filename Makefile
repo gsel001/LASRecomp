@@ -39,7 +39,7 @@ IMGUI    := third_party/imgui
 # -mllvm -disable-licm-promotion: LLVM's LICM pass takes minutes on the few generated files that hold one giant function (main_404 / main_406:
 # 12 and 11 minutes at -O1 on a Steam Deck, 33 and 56 s without the promotion; the rest of the files cost the same). Keep in step with GAMELIB_CFLAGS
 # in runtime/gamebuild.c (the start screen's build of the same code).
-GENFLAGS := -O1 -fno-strict-aliasing -Wno-return-type -Wno-unused-label -fvisibility=hidden -mllvm -disable-licm-promotion -Iruntime
+GENFLAGS := -O1 -g0 -fno-strict-aliasing -Wno-return-type -Wno-unused-label -fvisibility=hidden -mllvm -disable-licm-promotion -Iruntime
 
 # The game code (made by `make gen` from your own game files) is its own library next to the app (runtime/gamelib.h);
 # the app itself holds none of it
@@ -50,7 +50,7 @@ GEN_OBJ  := $(patsubst %.c,$(B)/obj/%.o,$(patsubst $(GEN)/%,%,$(GEN_SRC))) $(B)/
 RT_SRC   := $(wildcard runtime/*.c runtime/*.cpp) $(wildcard runtime/hle/*.c) $(wildcard runtime/services/*.c) \
             $(wildcard runtime/nvn/*.c) $(wildcard runtime/nvn/maxwell/*.c) runtime/platform/$(PLATFORM).c
 RT_HDRS  := $(wildcard runtime/*.h runtime/game_addresses/*.h) $(wildcard runtime/platform/*.h) $(wildcard runtime/nvn/*.h) \
-            $(wildcard runtime/nvn/maxwell/*.h) $(wildcard runtime/nvn/vulkan/*.h) $(wildcard runtime/ui/*.h)
+            $(wildcard runtime/nvn/maxwell/*.h) $(wildcard runtime/nvn/vulkan/*.h) $(wildcard runtime/ui/*.h) $(wildcard runtime/ui/lang/*.inc)
 UI_SRC   := $(wildcard runtime/ui/*.mm)
 UI_OBJ   := $(patsubst runtime/%.mm,$(B)/rt/%.o,$(UI_SRC))
 IMGUI_OBJ := $(B)/imgui/imgui.o $(B)/imgui/imgui_draw.o $(B)/imgui/imgui_tables.o $(B)/imgui/imgui_widgets.o \

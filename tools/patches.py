@@ -308,6 +308,21 @@ def _map_page(gen, a):
 PATCHES[MAP_PAGE_SITE] = _map_page
 
 
+# HUD hearts refresh (runtime/hle/hud_hearts.c): main+0xeaa800 is the HUD's normal state update (x0 = the HUD). Its
+# prologue reruns the HUD's own set-up when a menu changed Link's hearts.
+HUD_HEARTS_SITE = A.HUD_HEARTS_SITE
+
+
+def _hud_hearts(gen, a):
+    w = struct.unpack_from('<I', gen.nso.image, a - gen.base)[0]
+    assert w == 0xd102c3ff, hex(w)  # sub sp, sp, #0xb0
+    return ('{ extern void rt_hud_hearts_tick(Cpu *); rt_hud_hearts_tick(c); c->sp -= 0xb0; }'
+            f'  /* {a:#x}: sub sp, sp, #0xb0 (HUD update: hearts refresh) */')
+
+
+PATCHES[HUD_HEARTS_SITE] = _hud_hearts
+
+
 # ... and its epilogue (the page's layout was updated this frame): the check tracker hides the game's own cursor and
 # button bar there (tracker_overlay.mm map_page_takeover), after the update that may have shown them again.
 MAP_PAGE_END_SITE = A.MAP_PAGE_END_SITE
